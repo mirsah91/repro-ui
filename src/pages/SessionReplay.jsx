@@ -5,7 +5,7 @@ import useTimeline from "../hooks/useTimeline";
 import { decodeBase64JsonArray } from "../lib/rrwebDecode";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
-const WINDOW_MS = 1500;   // ± window for "nearby" events
+const WINDOW_MS = 1500;
 const POLL_MS = 200;
 
 function useRrwebStream(sessionId) {
@@ -16,7 +16,6 @@ function useRrwebStream(sessionId) {
     const nextSeqRef = useRef(0);
     const doneRef = useRef(false);
 
-    // load rrweb meta from /full
     useEffect(() => {
         let mounted = true;
         (async () => {
@@ -38,7 +37,6 @@ function useRrwebStream(sessionId) {
         return () => { mounted = false; };
     }, [sessionId]);
 
-    // paginated pull
     async function pullMore(limit = 5) {
         if (doneRef.current) return;
         const afterSeq = nextSeqRef.current - 1; // endpoint expects > afterSeq
@@ -57,22 +55,40 @@ function useRrwebStream(sessionId) {
     return { meta, status, queueRef, pullMore, doneRef };
 }
 
+// utility: pick a usable timestamp from a timeline item
+function tickTime(ev) {
+    if (typeof ev?.t === "number") return ev.t;
+    if (typeof ev?.tStart === "number") return ev.tStart;
+    if (typeof ev?.tEnd === "number") return ev.tEnd;
+    return null;
+}
+
 export default function SessionReplay({ sessionId }) {
     const containerRef = useRef(null);
     const replayerRef = useRef(null);
 
     const { meta, status, queueRef, pullMore, doneRef } = useRrwebStream(sessionId);
-    const ticks = useTimeline(sessionId); // server-time ticks for backend layer
+    const rawTicks = useTimeline(sessionId); // backend events (server time)
 
     const [currentTime, setCurrentTime] = useState(0); // rrweb virtual ms
     const [playerStatus, setPlayerStatus] = useState("idle"); // idle | loading | ready | no-rrweb | error
     const [showAll, setShowAll] = useState(false);
 
-    // time alignment (server ms -> rrweb time)
-    const rrwebFirstTsRef = useRef(null);
-    const clockOffsetRef = useRef(0);
+    // time alignment
+    const rrwebFirstTsRef = useRef(null);   // first rrweb event.timestamp
+    const clockOffsetRef = useRef(0);       // server_ms - rrweb_ms
 
-    const toRrwebTime = (serverMs) => serverMs - (clockOffsetRef.current || 0);
+    const toRrwebTime = (serverMs) =>
+        typeof serverMs === "number" ? (serverMs - (clockOffsetRef.current || 0)) : null;
+
+    // normalize and sort ticks once
+    const ticks = useMemo(() => {
+        const mapped = (rawTicks || [])
+            .map(ev => ({ ...ev, _t: tickTime(ev) }))
+            .filter(ev => typeof ev._t === "number")
+            .sort((a, b) => a._t - b._t);
+        return mapped;
+    }, [rawTicks]);
 
     // bootstrap player once rrweb meta is ready
     useEffect(() => {
@@ -83,7 +99,7 @@ export default function SessionReplay({ sessionId }) {
             try {
                 setPlayerStatus("loading");
 
-                // pull first page until we get >= 2 events (rrweb requirement)
+                // ensure we have at least 2 events for rrweb init
                 while (queueRef.current.length < 2 && !doneRef.current) {
                     await pullMore(10);
                 }
@@ -93,13 +109,14 @@ export default function SessionReplay({ sessionId }) {
                     return;
                 }
 
-                // compute clock offset: align first rrweb event with earliest backend tick (if available)
                 rrwebFirstTsRef.current = initial[0]?.timestamp || null;
-                const firstTickTs = (ticks && ticks.length) ? (ticks[0]?.t ?? null) : null;
-                clockOffsetRef.current =
-                    rrwebFirstTsRef.current && firstTickTs
-                        ? firstTickTs - rrwebFirstTsRef.current
-                        : 0;
+
+                // compute initial offset if ticks already available
+                if (rrwebFirstTsRef.current && ticks.length) {
+                    clockOffsetRef.current = ticks[0]._t - rrwebFirstTsRef.current;
+                } else {
+                    clockOffsetRef.current = 0;
+                }
 
                 // init replayer
                 if (replayerRef.current) {
@@ -112,11 +129,10 @@ export default function SessionReplay({ sessionId }) {
                     speed: 1.0,
                     mouseTail: false,
                 });
-
                 replayerRef.current = rep;
                 rep.play();
 
-                // keep currentTime updated
+                // keep current time in sync
                 const interval = window.setInterval(() => {
                     try {
                         const t = replayerRef.current?.getCurrentTime?.() ?? 0;
@@ -124,22 +140,21 @@ export default function SessionReplay({ sessionId }) {
                     } catch {}
                 }, POLL_MS);
 
-                // background feed
+                // background feed: add events one-by-one (safer)
                 (async function feed() {
                     while (!cancelled && replayerRef.current && !doneRef.current) {
                         if (queueRef.current.length < 50) {
                             await pullMore(10);
                         }
                         const batch = queueRef.current.splice(0, 50);
-                        if (batch.length) {
-                            try { replayerRef.current.addEvent(batch); } catch {}
+                        for (const ev of batch) {
+                            try { replayerRef.current.addEvent(ev); } catch {}
                         }
                         await new Promise(r => setTimeout(r, 100));
                     }
                 })();
 
                 setPlayerStatus("ready");
-
                 return () => window.clearInterval(interval);
             } catch (e) {
                 console.error("replay bootstrap error", e);
@@ -152,17 +167,23 @@ export default function SessionReplay({ sessionId }) {
             try { replayerRef.current?.pause(); } catch {}
             replayerRef.current = null;
         };
-    }, [status, ticks]); // include `ticks` so offset adjusts when timeline arrives
+    }, [status, /* do NOT include ticks here to avoid re-init loop */]);
 
-    // combine & filter “nearby” backend events around rrweb time
+    // if ticks arrive after rrweb started, (re)compute offset without reinitializing player
+    useEffect(() => {
+        if (!rrwebFirstTsRef.current || !ticks.length) return;
+        clockOffsetRef.current = ticks[0]._t - rrwebFirstTsRef.current;
+    }, [ticks]);
+
+    // filter “nearby” events by aligned time
     const nearby = useMemo(() => {
-        if (!ticks?.length) return [];
+        if (!ticks.length) return [];
         if (showAll) return ticks;
 
         const t = currentTime;
         return ticks.filter(ev => {
-            const aligned = toRrwebTime(ev.t || 0);
-            return Math.abs(aligned - t) <= WINDOW_MS;
+            const aligned = toRrwebTime(ev._t);
+            return typeof aligned === "number" && Math.abs(aligned - t) <= WINDOW_MS;
         }).slice(0, 50);
     }, [ticks, currentTime, showAll]);
 
@@ -196,60 +217,70 @@ export default function SessionReplay({ sessionId }) {
                     </div>
                 )}
 
-                {!ticks?.length && (
+                {!ticks.length && (
                     <div className="text-xs text-gray-500 mb-2">
                         no backend timeline data for this session.
                     </div>
                 )}
 
                 <ul className="space-y-2">
-                    {nearby.map((e, i) => (
-                        <li key={i} className="rounded border p-2">
-                            <div className="text-xs text-gray-500">
-                                {e.kind} @ {e.t} (aligned ~ {Math.round(toRrwebTime(e.t))}ms)
-                            </div>
-
-                            {e.kind === "request" && (
-                                <div className="text-sm">
-                                    <div className="font-mono break-all">{e.meta?.method} {e.meta?.url}</div>
-                                    <div className="text-gray-600">status {e.meta?.status} • {e.meta?.durMs}ms</div>
+                    {nearby.map((e, i) => {
+                        const aligned = toRrwebTime(e._t);
+                        return (
+                            <li key={i} className="rounded border p-2">
+                                <div className="text-xs text-gray-500">
+                                    {e.kind} @ {e._t} (aligned ~ {typeof aligned === "number" ? Math.round(aligned) : "—"}ms)
                                 </div>
-                            )}
 
-                            {e.kind === "db" && (
-                                <div className="text-sm">
-                                    <div className="font-mono">{e.meta?.collection} • {e.meta?.op}</div>
-                                    {e.meta?.query && (
-                                        <pre className="text-[11px] bg-black-50 rounded p-1 overflow-auto">
-{JSON.stringify(e.meta.query, null, 2)}
-                    </pre>
-                                    )}
-                                    {e.meta?.resultMeta && (
-                                        <div className="text-gray-600 text-xs">
-                                            result {JSON.stringify(e.meta.resultMeta)}
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-
-                            {e.kind === "email" && (
-                                <div className="text-sm">
-                                    <div className="font-mono break-all">{e.meta?.subject}</div>
-                                    <div className="text-gray-600 text-xs">
-                                        to: {(e.meta?.to || []).map(a => a?.email || a).join(", ")} • {e.meta?.statusCode ?? "—"}
+                                {e.kind === "request" && (
+                                    <div className="text-sm">
+                                        <div className="font-mono break-all">{e.meta?.method} {e.meta?.url}</div>
+                                        <div className="text-gray-600">status {e.meta?.status} • {e.meta?.durMs}ms</div>
                                     </div>
-                                </div>
-                            )}
+                                )}
 
-                            {e.kind === "action" && (
-                                <div className="text-sm">
-                                    <div className="font-mono break-all">{e.label || e.actionId}</div>
-                                </div>
-                            )}
+                                {e.kind === "db" && (
+                                    <div className="text-sm">
+                                        <div className="font-mono">{e.meta?.collection} • {e.meta?.op}</div>
+                                        {e.meta?.query && (
+                                            <pre className="text-[11px] bg-gray-50 rounded p-1 overflow-auto">
+{JSON.stringify(e.meta.query, null, 2)}
+                      </pre>
+                                        )}
+                                        {e.meta?.resultMeta && (
+                                            <div className="text-gray-600 text-xs">
+                                                result {JSON.stringify(e.meta.resultMeta)}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {e.kind === "email" && (
+                                    <div className="text-sm">
+                                        <div className="font-mono break-all">{e.meta?.subject}</div>
+                                        <div className="text-gray-600 text-xs">
+                                            to: {(e.meta?.to || []).map(a => a?.email || a).join(", ")} • {e.meta?.statusCode ?? "—"}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {e.kind === "action" && (
+                                    <div className="text-sm">
+                                        <div className="font-mono break-all">{e.label || e.actionId}</div>
+                                        {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
+                                            <div className="text-gray-600 text-xs">
+                                                [{e.tStart ?? "—"} … {e.tEnd ?? "—"}]
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </li>
+                        );
+                    })}
+                    {!nearby.length && ticks.length > 0 && !showAll && (
+                        <li className="text-xs text-gray-500">
+                            no events near the current time. Try <button className="underline" onClick={() => setShowAll(true)}>show all</button>.
                         </li>
-                    ))}
-                    {!nearby.length && (
-                        <li className="text-xs text-gray-500">no events to show.</li>
                     )}
                 </ul>
             </div>
