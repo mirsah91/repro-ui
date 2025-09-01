@@ -63,9 +63,50 @@ function tickTime(ev) {
     return null;
 }
 
+// Build a [start,end] window in SERVER time for any timeline item
+function deriveServerWindow(ev) {
+    const base =
+        typeof ev?.t === "number"
+            ? ev.t
+            : typeof ev?.tStart === "number"
+                ? ev.tStart
+                : typeof ev?.tEnd === "number"
+                    ? ev.tEnd
+                    : null;
+
+    if (base == null) return { start: null, end: null };
+
+    // If action has explicit window, use it
+    if (typeof ev.tStart === "number" || typeof ev.tEnd === "number") {
+        return {
+            start: typeof ev.tStart === "number" ? ev.tStart : base,
+            end: typeof ev.tEnd === "number" ? ev.tEnd : base,
+        };
+    }
+
+    // If request has duration, treat t as END
+    const dur = typeof ev?.meta?.durMs === "number" ? ev.meta.durMs : null;
+    if (dur && dur > 0) {
+        return { start: base - dur, end: base };
+    }
+
+    // Instant
+    return { start: base, end: base };
+}
+
+// Is absolute time `abs` near [start,end] (both in SERVER ms)?
+function absInWindow(abs, start, end, win) {
+    if (typeof abs !== "number") return false;
+    if (typeof start !== "number" && typeof end !== "number") return false;
+    const s = typeof start === "number" ? start : end;
+    const e = typeof end === "number" ? end : start;
+    return abs >= s - win && abs <= e + win;
+}
+
 export default function SessionReplay({ sessionId }) {
     const containerRef = useRef(null);
     const replayerRef = useRef(null);
+    const rrwebZeroTsRef = useRef(null); // first rrweb event timestamp (epoch ms)
 
     const { meta, status, queueRef, pullMore, doneRef } = useRrwebStream(sessionId);
     const rawTicks = useTimeline(sessionId); // backend events (server time)
@@ -83,12 +124,41 @@ export default function SessionReplay({ sessionId }) {
 
     // normalize and sort ticks once
     const ticks = useMemo(() => {
-        const mapped = (rawTicks || [])
-            .map(ev => ({ ...ev, _t: tickTime(ev) }))
-            .filter(ev => typeof ev._t === "number")
-            .sort((a, b) => a._t - b._t);
-        return mapped;
-    }, [rawTicks]);
+        const zero = rrwebZeroTsRef.current; // may be null until replay bootstraps
+        const out = [];
+
+        for (const ev of rawTicks || []) {
+            const { start, end } = deriveServerWindow(ev);
+            if (typeof start !== "number" && typeof end !== "number") continue;
+
+            // aligned (rrweb) times are derived only if we already know the rrweb epoch
+            const alignedStart = typeof zero === "number" && typeof start === "number" ? (start - zero) : null;
+            const alignedEnd   = typeof zero === "number" && typeof end   === "number" ? (end   - zero) : null;
+
+            out.push({
+                ...ev,
+                _t: tickTime(ev),           // original server “point” for display fallbacks
+                _startServer: start,        // server ms
+                _endServer: end,            // server ms
+                _alignedStart: alignedStart, // rrweb ms (since first rrweb event)
+                _alignedEnd: alignedEnd,     // rrweb ms
+            });
+        }
+
+        // Sort by SERVER start (stable regardless of rrweb init timing)
+        out.sort((a, b) => {
+            const aa = (typeof a._startServer === "number" ? a._startServer : a._endServer ?? 0);
+            const bb = (typeof b._startServer === "number" ? b._startServer : b._endServer ?? 0);
+            if (aa !== bb) return aa - bb;
+            // tie-break by duration
+            const da = (a._endServer ?? aa) - (a._startServer ?? aa);
+            const db = (b._endServer ?? bb) - (b._startServer ?? bb);
+            return da - db;
+        });
+
+        return out;
+    }, [rawTicks, rrwebZeroTsRef.current]);
+
 
     // bootstrap player once rrweb meta is ready
     useEffect(() => {
@@ -104,6 +174,8 @@ export default function SessionReplay({ sessionId }) {
                     await pullMore(10);
                 }
                 const initial = queueRef.current.splice(0, queueRef.current.length);
+                rrwebZeroTsRef.current = initial[0]?.timestamp || null;
+
                 if (!initial.length || initial.length < 2) {
                     setPlayerStatus("no-rrweb");
                     return;
@@ -180,11 +252,14 @@ export default function SessionReplay({ sessionId }) {
         if (!ticks.length) return [];
         if (showAll) return ticks;
 
-        const t = currentTime;
-        return ticks.filter(ev => {
-            const aligned = toRrwebTime(ev._t);
-            return typeof aligned === "number" && Math.abs(aligned - t) <= WINDOW_MS;
-        }).slice(0, 50);
+        // rrweb current “absolute” = first rrweb timestamp + currentTime
+        const zero = rrwebZeroTsRef.current;
+        if (typeof zero !== "number") return []; // replay not ready yet
+
+        const absNow = zero + currentTime; // epoch ms
+        return ticks
+            .filter(ev => absInWindow(absNow, ev._startServer, ev._endServer, WINDOW_MS))
+            .slice(0, 50);
     }, [ticks, currentTime, showAll]);
 
     return (
@@ -243,7 +318,7 @@ export default function SessionReplay({ sessionId }) {
                                     <div className="text-sm">
                                         <div className="font-mono">{e.meta?.collection} • {e.meta?.op}</div>
                                         {e.meta?.query && (
-                                            <pre className="text-[11px] bg-gray-50 rounded p-1 overflow-auto">
+                                            <pre className="text-[11px] bg-black-50 rounded p-1 overflow-auto">
 {JSON.stringify(e.meta.query, null, 2)}
                       </pre>
                                         )}
