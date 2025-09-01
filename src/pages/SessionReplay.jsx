@@ -254,13 +254,21 @@ export default function SessionReplay({ sessionId }) {
 
         // rrweb current “absolute” = first rrweb timestamp + currentTime
         const zero = rrwebZeroTsRef.current;
-        if (typeof zero !== "number") return []; // replay not ready yet
+        if (typeof zero !== "number") return [];
 
         const absNow = zero + currentTime; // epoch ms
         return ticks
-            .filter(ev => absInWindow(absNow, ev._startServer, ev._endServer, WINDOW_MS))
+            .filter((ev) => absInWindow(absNow, ev._startServer, ev._endServer, WINDOW_MS))
             .slice(0, 50);
     }, [ticks, currentTime, showAll]);
+
+    const orderedNearby = React.useMemo(() => {
+        const actions  = nearby.filter(e => e.kind === "action");
+        const requests = nearby.filter(e => e.kind === "request");
+        const dbs      = nearby.filter(e => e.kind === "db");
+        const emails   = nearby.filter(e => e.kind === "email");
+        return [...actions, ...requests, ...dbs, ...emails];
+    }, [nearby]);
 
     return (
         <div className="flex h-screen">
@@ -299,7 +307,7 @@ export default function SessionReplay({ sessionId }) {
                 )}
 
                 <ul className="space-y-2">
-                    {nearby.map((e, i) => {
+                    {orderedNearby.map((e, i) => {
                         const aligned = toRrwebTime(e._t);
                         return (
                             <li key={i} className="rounded border p-2">
