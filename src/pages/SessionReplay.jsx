@@ -334,6 +334,49 @@ export default function SessionReplay({ sessionId }) {
     const canPause = playerStatus === "playing" || playerStatus === 'ready'
     const canPlay = playerStatus !== "playing" && playerStatus !== 'ready'
 
+    function alignedSeekMsFor(ev) {
+        // prefer start → end → point
+        const serverMs =
+            (typeof ev._startServer === "number" && ev._startServer) ??
+            (typeof ev._endServer === "number" && ev._endServer) ??
+            (typeof ev._t === "number" && ev._t) ??
+            null;
+
+        const rrMs = serverToRrwebOffsetMs(serverMs);
+        if (rrMs == null) return null;
+
+        const total = replayerRef.current?.getMetaData?.().totalTime ?? 0;
+        return Math.max(0, Math.min(total || 0, rrMs));
+    }
+
+    function jumpToEvent(ev) {
+        const rep = replayerRef.current;
+        if (!rep) return;
+
+        const target = alignedSeekMsFor(ev);
+        if (target == null) return;
+
+        try {
+            rep.pause();
+            lastPausedTimeRef.current = target;
+            rep.play(target); // seek + play (or play+pause if you want to land paused)
+            setPlayerStatus("playing");
+            setCurrentTime(target);
+        } catch (e) {
+            console.warn("seek failed", e);
+        }
+    }
+
+    function serverToRrwebOffsetMs(serverMs) {
+        if (typeof serverMs !== "number") return null;
+        const rrFirst = rrwebFirstTsRef.current;
+        const offset  = clockOffsetRef.current ?? 0; // server - rrweb
+        if (typeof rrFirst !== "number") return null;
+        // Convert server epoch → rrweb virtual ms since start
+        const virtual = (serverMs - offset) - rrFirst;
+        return Number.isFinite(virtual) ? Math.max(0, virtual) : null;
+    }
+
     return (
         <div className="flex h-screen">
             {/* left: rrweb player */}
@@ -454,7 +497,14 @@ export default function SessionReplay({ sessionId }) {
                                     {g.items.map((e, i) => {
                                         const aligned = toRrwebTime(e._t);
                                         return (
-                                            <div key={i} className="rounded border p-2">
+                                            <div
+                                                key={i}
+                                                role="button"
+                                                tabIndex={0}
+                                                onClick={() => jumpToEvent(e)}
+                                                onKeyDown={(k) => (k.key === "Enter" || k.key === " ") && jumpToEvent(e)}
+                                                className="rounded border p-2 cursor-pointer hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                                            >
                                                 <div className="text-xs text-gray-500">
                                                     {e.kind} @ {e._t} (aligned
                                                     ~ {typeof aligned === "number" ? Math.round(aligned) : "—"}ms)
