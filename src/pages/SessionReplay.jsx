@@ -8,6 +8,62 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 const WINDOW_MS = 1500;
 const POLL_MS = 200;
 
+// rank order inside one action group
+const KIND_RANK = { action: 0, request: 1, db: 2, email: 3 };
+
+// pick a point time (server epoch ms) from any item
+function itemServerTime(it) {
+    if (typeof it.t === "number") return it.t;
+    if (typeof it.tStart === "number") return it.tStart;
+    if (typeof it.tEnd === "number") return it.tEnd;
+    return null;
+}
+
+// group items by actionId; singletons for items without actionId
+function groupByAction(items) {
+    const groups = new Map();
+    for (const it of items) {
+        const key =
+            it.actionId ||
+            `__nogroup__:${it.kind}:${Math.random().toString(36).slice(2)}`;
+        let g = groups.get(key);
+        if (!g) {
+            g = { id: key, items: [], start: Infinity, end: -Infinity };
+            groups.set(key, g);
+        }
+        const t = itemServerTime(it);
+        if (typeof t === "number") {
+            g.start = Math.min(g.start, t);
+            g.end = Math.max(g.end, t);
+        }
+        g.items.push(it);
+    }
+
+    // sort items inside group by time, then by kind rank
+    for (const g of groups.values()) {
+        g.items.sort((a, b) => {
+            const ra = KIND_RANK[a.kind] ?? 99;
+            const rb = KIND_RANK[b.kind] ?? 99;
+            if (ra !== rb) return ra - rb;
+
+            const ta = itemServerTime(a) ?? Infinity;
+            const tb = itemServerTime(b) ?? Infinity;
+            return ta - tb;
+        });
+    }
+
+    // sort groups by their first timestamp
+    return Array.from(groups.values()).sort((a, b) => a.start - b.start);
+}
+
+// flatten grouped list back to a single array for rendering
+function flattenGrouped(groups) {
+    const out = [];
+    for (const g of groups) out.push(...g.items);
+    return out;
+}
+
+
 function useRrwebStream(sessionId) {
     const [meta, setMeta] = useState({ firstSeq: 0, lastSeq: 0 });
     const [status, setStatus] = useState("idle"); // idle | loading | ready | error
@@ -159,6 +215,31 @@ export default function SessionReplay({ sessionId }) {
         return out;
     }, [rawTicks, rrwebZeroTsRef.current]);
 
+    // absolute rrweb "now" in SERVER epoch ms (or null if player not ready)
+    const absNow = useMemo(() => {
+        const zero = rrwebZeroTsRef.current;
+        return typeof zero === "number" ? zero + currentTime : null;
+    }, [currentTime]);
+
+    // choose base items: either everything (showAll) or only items near the current window
+    const baseItems = useMemo(() => {
+        if (showAll) return ticks;
+        if (absNow == null) return [];
+        return ticks.filter((ev) =>
+            absInWindow(absNow, ev._startServer, ev._endServer, WINDOW_MS)
+        );
+    }, [ticks, showAll, absNow]);
+
+    // final list to render: grouped by action, then flattened (Action → Request → DB → Email)
+    const renderList = useMemo(() => {
+        const groups = groupByAction(baseItems);
+        return flattenGrouped(groups);
+    }, [baseItems]);
+
+    // groups to render (Action → Request → DB → Email)
+    const renderGroups = React.useMemo(() => {
+        return groupByAction(baseItems);
+    }, [baseItems]);
 
     // bootstrap player once rrweb meta is ready
     useEffect(() => {
@@ -174,6 +255,8 @@ export default function SessionReplay({ sessionId }) {
                     await pullMore(10);
                 }
                 const initial = queueRef.current.splice(0, queueRef.current.length);
+                if (!initial.length) return;
+
                 rrwebZeroTsRef.current = initial[0]?.timestamp || null;
 
                 if (!initial.length || initial.length < 2) {
@@ -307,64 +390,98 @@ export default function SessionReplay({ sessionId }) {
                 )}
 
                 <ul className="space-y-2">
-                    {orderedNearby.map((e, i) => {
-                        const aligned = toRrwebTime(e._t);
-                        return (
-                            <li key={i} className="rounded border p-2">
-                                <div className="text-xs text-gray-500">
-                                    {e.kind} @ {e._t} (aligned ~ {typeof aligned === "number" ? Math.round(aligned) : "—"}ms)
-                                </div>
-
-                                {e.kind === "request" && (
-                                    <div className="text-sm">
-                                        <div className="font-mono break-all">{e.meta?.method} {e.meta?.url}</div>
-                                        <div className="text-gray-600">status {e.meta?.status} • {e.meta?.durMs}ms</div>
-                                    </div>
-                                )}
-
-                                {e.kind === "db" && (
-                                    <div className="text-sm">
-                                        <div className="font-mono">{e.meta?.collection} • {e.meta?.op}</div>
-                                        {e.meta?.query && (
-                                            <pre className="text-[11px] bg-black-50 rounded p-1 overflow-auto">
-{JSON.stringify(e.meta.query, null, 2)}
-                      </pre>
-                                        )}
-                                        {e.meta?.resultMeta && (
-                                            <div className="text-gray-600 text-xs">
-                                                result {JSON.stringify(e.meta.resultMeta)}
+                    <ul className="space-y-3">
+                        {renderGroups.map((g, gi) => (
+                            <li key={g.id || gi} className="rounded border p-2">
+                                {/* Group header: show the Action label if present, else a generic tag */}
+                                {(() => {
+                                    const action = g.items.find(it => it.kind === "action");
+                                    const title = action?.label || action?.actionId || "Other events";
+                                    const win = action
+                                        ? `[${action.tStart ?? "—"} … ${action.tEnd ?? "—"}]`
+                                        : "";
+                                    return (
+                                        <div className="mb-2">
+                                            <div className="text-xs font-semibold text-gray-700">
+                                                {title} {win && <span className="ml-2 text-gray-500">{win}</span>}
                                             </div>
-                                        )}
-                                    </div>
-                                )}
-
-                                {e.kind === "email" && (
-                                    <div className="text-sm">
-                                        <div className="font-mono break-all">{e.meta?.subject}</div>
-                                        <div className="text-gray-600 text-xs">
-                                            to: {(e.meta?.to || []).map(a => a?.email || a).join(", ")} • {e.meta?.statusCode ?? "—"}
                                         </div>
-                                    </div>
-                                )}
+                                    );
+                                })()}
 
-                                {e.kind === "action" && (
-                                    <div className="text-sm">
-                                        <div className="font-mono break-all">{e.label || e.actionId}</div>
-                                        {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
-                                            <div className="text-gray-600 text-xs">
-                                                [{e.tStart ?? "—"} … {e.tEnd ?? "—"}]
+                                {/* Group items in rank order (already sorted by groupByAction) */}
+                                <div className="space-y-2">
+                                    {g.items.map((e, i) => {
+                                        const aligned = toRrwebTime(e._t);
+                                        return (
+                                            <div key={i} className="rounded border p-2">
+                                                <div className="text-xs text-gray-500">
+                                                    {e.kind} @ {e._t} (aligned
+                                                    ~ {typeof aligned === "number" ? Math.round(aligned) : "—"}ms)
+                                                </div>
+
+                                                {e.kind === "request" && (
+                                                    <div className="text-sm">
+                                                        <div className="font-mono break-all">
+                                                            {e.meta?.method} {e.meta?.url}
+                                                        </div>
+                                                        <div className="text-gray-600">
+                                                            status {e.meta?.status} • {e.meta?.durMs}ms
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {e.kind === "db" && (
+                                                    <div className="text-sm">
+                                                        <div
+                                                            className="font-mono">{e.meta?.collection} • {e.meta?.op}</div>
+                                                        {e.meta?.query && (
+                                                            <pre
+                                                                className="text-[11px] bg-black-50 rounded p-1 overflow-auto">
+{JSON.stringify(e.meta.query, null, 2)}
+                    </pre>
+                                                        )}
+                                                        {e.meta?.resultMeta && (
+                                                            <div className="text-gray-600 text-xs">
+                                                                result {JSON.stringify(e.meta.resultMeta)}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+
+                                                {e.kind === "email" && (
+                                                    <div className="text-sm">
+                                                        <div className="font-mono break-all">{e.meta?.subject}</div>
+                                                        <div className="text-gray-600 text-xs">
+                                                            to: {(e.meta?.to || []).map(a => a?.email || a).join(", ")} • {e.meta?.statusCode ?? "—"}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {e.kind === "action" && (
+                                                    <div className="text-sm">
+                                                        <div className="font-mono break-all">{e.label || e.actionId}</div>
+                                                        {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
+                                                            <div className="text-gray-600 text-xs">
+                                                                [{e.tStart ?? "—"} … {e.tEnd ?? "—"}]
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
                                             </div>
-                                        )}
-                                    </div>
-                                )}
+                                        );
+                                    })}
+                                </div>
                             </li>
-                        );
-                    })}
-                    {!nearby.length && ticks.length > 0 && !showAll && (
-                        <li className="text-xs text-gray-500">
-                            no events near the current time. Try <button className="underline" onClick={() => setShowAll(true)}>show all</button>.
-                        </li>
-                    )}
+                        ))}
+
+                        {!renderGroups.length && !showAll && (
+                            <li className="text-xs text-gray-500">
+                                no events near the current time. Try{" "}
+                                <button className="underline" onClick={() => setShowAll(true)}>show all</button>.
+                            </li>
+                        )}
+                    </ul>
                 </ul>
             </div>
         </div>
