@@ -163,6 +163,7 @@ export default function SessionReplay({ sessionId }) {
     const containerRef = useRef(null);
     const replayerRef = useRef(null);
     const rrwebZeroTsRef = useRef(null); // first rrweb event timestamp (epoch ms)
+    const lastPausedTimeRef = useRef(0);
 
     const { meta, status, queueRef, pullMore, doneRef } = useRrwebStream(sessionId);
     const rawTicks = useTimeline(sessionId); // backend events (server time)
@@ -330,37 +331,76 @@ export default function SessionReplay({ sessionId }) {
         clockOffsetRef.current = ticks[0]._t - rrwebFirstTsRef.current;
     }, [ticks]);
 
-    // filter “nearby” events by aligned time
-    const nearby = useMemo(() => {
-        if (!ticks.length) return [];
-        if (showAll) return ticks;
-
-        // rrweb current “absolute” = first rrweb timestamp + currentTime
-        const zero = rrwebZeroTsRef.current;
-        if (typeof zero !== "number") return [];
-
-        const absNow = zero + currentTime; // epoch ms
-        return ticks
-            .filter((ev) => absInWindow(absNow, ev._startServer, ev._endServer, WINDOW_MS))
-            .slice(0, 50);
-    }, [ticks, currentTime, showAll]);
-
-    const orderedNearby = React.useMemo(() => {
-        const actions  = nearby.filter(e => e.kind === "action");
-        const requests = nearby.filter(e => e.kind === "request");
-        const dbs      = nearby.filter(e => e.kind === "db");
-        const emails   = nearby.filter(e => e.kind === "email");
-        return [...actions, ...requests, ...dbs, ...emails];
-    }, [nearby]);
+    const canPause = playerStatus === "playing" || playerStatus === 'ready'
+    const canPlay = playerStatus !== "playing" && playerStatus !== 'ready'
 
     return (
         <div className="flex h-screen">
             {/* left: rrweb player */}
             <div className="flex-1 flex flex-col">
-                <div ref={containerRef} className="flex-1 bg-gray-50 border-b" />
+                <div ref={containerRef} className="flex-1 bg-gray-50 border-b"/>
+                {/* Play / Pause */}
+                <button
+                    onClick={() => {
+                        const rep = replayerRef.current;
+                        if (!rep) return;
+
+                        if (canPlay) {
+                            // resume from last known paused time (or currentTime as fallback)
+                            const resumeAt =
+                                Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
+                                    ? lastPausedTimeRef.current
+                                    : (rep.getCurrentTime?.() ?? currentTime ?? 0);
+
+                            rep.play(resumeAt);
+                            setPlayerStatus("playing");
+                        } else {
+                            // capture current position before pausing
+                            const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
+                            lastPausedTimeRef.current = now;
+                            rep.pause();
+                            setPlayerStatus("paused");
+                        }
+                    }}
+                    className="px-3 py-1 border rounded bg-gray-100 text-sm text-black"
+                >
+                    {canPause ? "Pause" : "Play"}
+                </button>
+                {/* Restart */}
+                <button
+                    onClick={() => {
+                        const rep = replayerRef.current;
+                        if (!rep) return;
+                        rep.pause();
+                        lastPausedTimeRef.current = 0; // keep our ref in sync
+                        rep.play(0);                    // explicit restart
+                        setPlayerStatus("playing");
+                    }}
+                    className="px-3 py-1 border rounded bg-gray-100 text-sm text-black"
+                >
+                    Restart
+                </button>
+                {/* Seek bar */}
+                <input
+                    type="range"
+                    min={0}
+                    max={replayerRef.current?.getMetaData().totalTime ?? 0}
+                    value={currentTime}
+                    onChange={(e) => {
+                        const rep = replayerRef.current;
+                        const newTime = Number(e.target.value);
+                        if (!rep) return;
+
+                        rep.pause();
+                        lastPausedTimeRef.current = newTime; // sync pause position
+                        rep.play(newTime);                   // seek + play
+                        setPlayerStatus("playing");
+                        setCurrentTime(newTime);
+                    }}
+                    className="flex-1"
+                />
                 <div className="p-2 border-t text-sm text-gray-600">
                     time: {Math.round(currentTime)} ms
-                    <span className="ml-4">seq range: {meta.firstSeq ?? "—"} → {meta.lastSeq ?? "—"}</span>
                     <span className="ml-4">status: {playerStatus}</span>
                 </div>
             </div>
@@ -372,7 +412,7 @@ export default function SessionReplay({ sessionId }) {
                         backend events {showAll ? "(all)" : `near ${Math.round(currentTime)}ms`}
                     </div>
                     <label className="text-xs flex items-center gap-2">
-                        <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
+                    <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)}/>
                         show all
                     </label>
                 </div>
@@ -430,7 +470,6 @@ export default function SessionReplay({ sessionId }) {
                                                         </div>
                                                     </div>
                                                 )}
-
                                                 {e.kind === "db" && (
                                                     <div className="text-sm">
                                                         <div
@@ -438,8 +477,8 @@ export default function SessionReplay({ sessionId }) {
                                                         {e.meta?.query && (
                                                             <pre
                                                                 className="text-[11px] bg-black-50 rounded p-1 overflow-auto">
-{JSON.stringify(e.meta.query, null, 2)}
-                    </pre>
+                                                                {JSON.stringify(e.meta.query, null, 2)}
+                                                            </pre>
                                                         )}
                                                         {e.meta?.resultMeta && (
                                                             <div className="text-gray-600 text-xs">
