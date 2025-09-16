@@ -8,6 +8,62 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 const WINDOW_MS = 1500;
 const POLL_MS = 200;
 
+// rank order inside one action group
+const KIND_RANK = { action: 0, request: 1, db: 2, email: 3 };
+
+// pick a point time (server epoch ms) from any item
+function itemServerTime(it) {
+    if (typeof it.t === "number") return it.t;
+    if (typeof it.tStart === "number") return it.tStart;
+    if (typeof it.tEnd === "number") return it.tEnd;
+    return null;
+}
+
+// group items by actionId; singletons for items without actionId
+function groupByAction(items) {
+    const groups = new Map();
+    for (const it of items) {
+        const key =
+            it.actionId ||
+            `__nogroup__:${it.kind}:${Math.random().toString(36).slice(2)}`;
+        let g = groups.get(key);
+        if (!g) {
+            g = { id: key, items: [], start: Infinity, end: -Infinity };
+            groups.set(key, g);
+        }
+        const t = itemServerTime(it);
+        if (typeof t === "number") {
+            g.start = Math.min(g.start, t);
+            g.end = Math.max(g.end, t);
+        }
+        g.items.push(it);
+    }
+
+    // sort items inside group by time, then by kind rank
+    for (const g of groups.values()) {
+        g.items.sort((a, b) => {
+            const ra = KIND_RANK[a.kind] ?? 99;
+            const rb = KIND_RANK[b.kind] ?? 99;
+            if (ra !== rb) return ra - rb;
+
+            const ta = itemServerTime(a) ?? Infinity;
+            const tb = itemServerTime(b) ?? Infinity;
+            return ta - tb;
+        });
+    }
+
+    // sort groups by their first timestamp
+    return Array.from(groups.values()).sort((a, b) => a.start - b.start);
+}
+
+// flatten grouped list back to a single array for rendering
+function flattenGrouped(groups) {
+    const out = [];
+    for (const g of groups) out.push(...g.items);
+    return out;
+}
+
+
 function useRrwebStream(sessionId) {
     const [meta, setMeta] = useState({ firstSeq: 0, lastSeq: 0 });
     const [status, setStatus] = useState("idle"); // idle | loading | ready | error
@@ -107,6 +163,7 @@ export default function SessionReplay({ sessionId }) {
     const containerRef = useRef(null);
     const replayerRef = useRef(null);
     const rrwebZeroTsRef = useRef(null); // first rrweb event timestamp (epoch ms)
+    const lastPausedTimeRef = useRef(0);
 
     const { meta, status, queueRef, pullMore, doneRef } = useRrwebStream(sessionId);
     const rawTicks = useTimeline(sessionId); // backend events (server time)
@@ -159,6 +216,31 @@ export default function SessionReplay({ sessionId }) {
         return out;
     }, [rawTicks, rrwebZeroTsRef.current]);
 
+    // absolute rrweb "now" in SERVER epoch ms (or null if player not ready)
+    const absNow = useMemo(() => {
+        const zero = rrwebZeroTsRef.current;
+        return typeof zero === "number" ? zero + currentTime : null;
+    }, [currentTime]);
+
+    // choose base items: either everything (showAll) or only items near the current window
+    const baseItems = useMemo(() => {
+        if (showAll) return ticks;
+        if (absNow == null) return [];
+        return ticks.filter((ev) =>
+            absInWindow(absNow, ev._startServer, ev._endServer, WINDOW_MS)
+        );
+    }, [ticks, showAll, absNow]);
+
+    // final list to render: grouped by action, then flattened (Action → Request → DB → Email)
+    const renderList = useMemo(() => {
+        const groups = groupByAction(baseItems);
+        return flattenGrouped(groups);
+    }, [baseItems]);
+
+    // groups to render (Action → Request → DB → Email)
+    const renderGroups = React.useMemo(() => {
+        return groupByAction(baseItems);
+    }, [baseItems]);
 
     // bootstrap player once rrweb meta is ready
     useEffect(() => {
@@ -174,6 +256,8 @@ export default function SessionReplay({ sessionId }) {
                     await pullMore(10);
                 }
                 const initial = queueRef.current.splice(0, queueRef.current.length);
+                if (!initial.length) return;
+
                 rrwebZeroTsRef.current = initial[0]?.timestamp || null;
 
                 if (!initial.length || initial.length < 2) {
@@ -247,29 +331,119 @@ export default function SessionReplay({ sessionId }) {
         clockOffsetRef.current = ticks[0]._t - rrwebFirstTsRef.current;
     }, [ticks]);
 
-    // filter “nearby” events by aligned time
-    const nearby = useMemo(() => {
-        if (!ticks.length) return [];
-        if (showAll) return ticks;
+    const canPause = playerStatus === "playing" || playerStatus === 'ready'
+    const canPlay = playerStatus !== "playing" && playerStatus !== 'ready'
 
-        // rrweb current “absolute” = first rrweb timestamp + currentTime
-        const zero = rrwebZeroTsRef.current;
-        if (typeof zero !== "number") return []; // replay not ready yet
+    function alignedSeekMsFor(ev) {
+        // prefer start → end → point
+        const serverMs =
+            (typeof ev._startServer === "number" && ev._startServer) ??
+            (typeof ev._endServer === "number" && ev._endServer) ??
+            (typeof ev._t === "number" && ev._t) ??
+            null;
 
-        const absNow = zero + currentTime; // epoch ms
-        return ticks
-            .filter(ev => absInWindow(absNow, ev._startServer, ev._endServer, WINDOW_MS))
-            .slice(0, 50);
-    }, [ticks, currentTime, showAll]);
+        const rrMs = serverToRrwebOffsetMs(serverMs);
+        if (rrMs == null) return null;
+
+        const total = replayerRef.current?.getMetaData?.().totalTime ?? 0;
+        return Math.max(0, Math.min(total || 0, rrMs));
+    }
+
+    function jumpToEvent(ev) {
+        const rep = replayerRef.current;
+        if (!rep) return;
+
+        const target = alignedSeekMsFor(ev);
+        if (target == null) return;
+
+        try {
+            rep.pause();
+            lastPausedTimeRef.current = target;
+            rep.play(target); // seek + play (or play+pause if you want to land paused)
+            setPlayerStatus("playing");
+            setCurrentTime(target);
+        } catch (e) {
+            console.warn("seek failed", e);
+        }
+    }
+
+    function serverToRrwebOffsetMs(serverMs) {
+        if (typeof serverMs !== "number") return null;
+        const rrFirst = rrwebFirstTsRef.current;
+        const offset  = clockOffsetRef.current ?? 0; // server - rrweb
+        if (typeof rrFirst !== "number") return null;
+        // Convert server epoch → rrweb virtual ms since start
+        const virtual = (serverMs - offset) - rrFirst;
+        return Number.isFinite(virtual) ? Math.max(0, virtual) : null;
+    }
 
     return (
         <div className="flex h-screen">
             {/* left: rrweb player */}
             <div className="flex-1 flex flex-col">
-                <div ref={containerRef} className="flex-1 bg-gray-50 border-b" />
+                <div ref={containerRef} className="flex-1 bg-gray-50 border-b"/>
+                {/* Play / Pause */}
+                <button
+                    onClick={() => {
+                        const rep = replayerRef.current;
+                        if (!rep) return;
+
+                        if (canPlay) {
+                            // resume from last known paused time (or currentTime as fallback)
+                            const resumeAt =
+                                Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
+                                    ? lastPausedTimeRef.current
+                                    : (rep.getCurrentTime?.() ?? currentTime ?? 0);
+
+                            rep.play(resumeAt);
+                            setPlayerStatus("playing");
+                        } else {
+                            // capture current position before pausing
+                            const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
+                            lastPausedTimeRef.current = now;
+                            rep.pause();
+                            setPlayerStatus("paused");
+                        }
+                    }}
+                    className="px-3 py-1 border rounded bg-gray-100 text-sm text-black"
+                >
+                    {canPause ? "Pause" : "Play"}
+                </button>
+                {/* Restart */}
+                <button
+                    onClick={() => {
+                        const rep = replayerRef.current;
+                        if (!rep) return;
+                        rep.pause();
+                        lastPausedTimeRef.current = 0; // keep our ref in sync
+                        rep.play(0);                    // explicit restart
+                        setPlayerStatus("playing");
+                    }}
+                    className="px-3 py-1 border rounded bg-gray-100 text-sm text-black"
+                >
+                    Restart
+                </button>
+                {/* Seek bar */}
+                <input
+                    type="range"
+                    min={0}
+                    max={replayerRef.current?.getMetaData().totalTime ?? 0}
+                    value={currentTime}
+                    onChange={(e) => {
+                        const rep = replayerRef.current;
+                        const newTime = Number(e.target.value);
+                        if (!rep) return;
+
+                        rep.pause();
+                        lastPausedTimeRef.current = newTime; // sync pause position
+                        rep.play(newTime);                   // seek + play
+                        setPlayerStatus("playing");
+                        setCurrentTime(newTime);
+                    }}
+                    className="flex-1"
+                />
                 <div className="p-2 border-t text-sm text-gray-600">
                     time: {Math.round(currentTime)} ms
-                    <span className="ml-4">seq range: {meta.firstSeq ?? "—"} → {meta.lastSeq ?? "—"}</span>
                     <span className="ml-4">status: {playerStatus}</span>
                 </div>
             </div>
@@ -281,7 +455,7 @@ export default function SessionReplay({ sessionId }) {
                         backend events {showAll ? "(all)" : `near ${Math.round(currentTime)}ms`}
                     </div>
                     <label className="text-xs flex items-center gap-2">
-                        <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
+                    <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)}/>
                         show all
                     </label>
                 </div>
@@ -299,64 +473,104 @@ export default function SessionReplay({ sessionId }) {
                 )}
 
                 <ul className="space-y-2">
-                    {nearby.map((e, i) => {
-                        const aligned = toRrwebTime(e._t);
-                        return (
-                            <li key={i} className="rounded border p-2">
-                                <div className="text-xs text-gray-500">
-                                    {e.kind} @ {e._t} (aligned ~ {typeof aligned === "number" ? Math.round(aligned) : "—"}ms)
-                                </div>
-
-                                {e.kind === "request" && (
-                                    <div className="text-sm">
-                                        <div className="font-mono break-all">{e.meta?.method} {e.meta?.url}</div>
-                                        <div className="text-gray-600">status {e.meta?.status} • {e.meta?.durMs}ms</div>
-                                    </div>
-                                )}
-
-                                {e.kind === "db" && (
-                                    <div className="text-sm">
-                                        <div className="font-mono">{e.meta?.collection} • {e.meta?.op}</div>
-                                        {e.meta?.query && (
-                                            <pre className="text-[11px] bg-black-50 rounded p-1 overflow-auto">
-{JSON.stringify(e.meta.query, null, 2)}
-                      </pre>
-                                        )}
-                                        {e.meta?.resultMeta && (
-                                            <div className="text-gray-600 text-xs">
-                                                result {JSON.stringify(e.meta.resultMeta)}
+                    <ul className="space-y-3">
+                        {renderGroups.map((g, gi) => (
+                            <li key={g.id || gi} className="rounded border p-2">
+                                {/* Group header: show the Action label if present, else a generic tag */}
+                                {(() => {
+                                    const action = g.items.find(it => it.kind === "action");
+                                    const title = action?.label || action?.actionId || "Other events";
+                                    const win = action
+                                        ? `[${action.tStart ?? "—"} … ${action.tEnd ?? "—"}]`
+                                        : "";
+                                    return (
+                                        <div className="mb-2">
+                                            <div className="text-xs font-semibold text-gray-700">
+                                                {title} {win && <span className="ml-2 text-gray-500">{win}</span>}
                                             </div>
-                                        )}
-                                    </div>
-                                )}
-
-                                {e.kind === "email" && (
-                                    <div className="text-sm">
-                                        <div className="font-mono break-all">{e.meta?.subject}</div>
-                                        <div className="text-gray-600 text-xs">
-                                            to: {(e.meta?.to || []).map(a => a?.email || a).join(", ")} • {e.meta?.statusCode ?? "—"}
                                         </div>
-                                    </div>
-                                )}
+                                    );
+                                })()}
 
-                                {e.kind === "action" && (
-                                    <div className="text-sm">
-                                        <div className="font-mono break-all">{e.label || e.actionId}</div>
-                                        {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
-                                            <div className="text-gray-600 text-xs">
-                                                [{e.tStart ?? "—"} … {e.tEnd ?? "—"}]
+                                {/* Group items in rank order (already sorted by groupByAction) */}
+                                <div className="space-y-2">
+                                    {g.items.map((e, i) => {
+                                        const aligned = toRrwebTime(e._t);
+                                        return (
+                                            <div
+                                                key={i}
+                                                role="button"
+                                                tabIndex={0}
+                                                onClick={() => jumpToEvent(e)}
+                                                onKeyDown={(k) => (k.key === "Enter" || k.key === " ") && jumpToEvent(e)}
+                                                className="rounded border p-2 cursor-pointer hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                                            >
+                                                <div className="text-xs text-gray-500">
+                                                    {e.kind} @ {e._t} (aligned
+                                                    ~ {typeof aligned === "number" ? Math.round(aligned) : "—"}ms)
+                                                </div>
+
+                                                {e.kind === "request" && (
+                                                    <div className="text-sm">
+                                                        <div className="font-mono break-all">
+                                                            {e.meta?.method} {e.meta?.url}
+                                                        </div>
+                                                        <div className="text-gray-600">
+                                                            status {e.meta?.status} • {e.meta?.durMs}ms
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                {e.kind === "db" && (
+                                                    <div className="text-sm">
+                                                        <div
+                                                            className="font-mono">{e.meta?.collection} • {e.meta?.op}</div>
+                                                        {e.meta?.query && (
+                                                            <pre
+                                                                className="text-[11px] bg-black-50 rounded p-1 overflow-auto">
+                                                                {JSON.stringify(e.meta.query, null, 2)}
+                                                            </pre>
+                                                        )}
+                                                        {e.meta?.resultMeta && (
+                                                            <div className="text-gray-600 text-xs">
+                                                                result {JSON.stringify(e.meta.resultMeta)}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+
+                                                {e.kind === "email" && (
+                                                    <div className="text-sm">
+                                                        <div className="font-mono break-all">{e.meta?.subject}</div>
+                                                        <div className="text-gray-600 text-xs">
+                                                            to: {(e.meta?.to || []).map(a => a?.email || a).join(", ")} • {e.meta?.statusCode ?? "—"}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {e.kind === "action" && (
+                                                    <div className="text-sm">
+                                                        <div className="font-mono break-all">{e.label || e.actionId}</div>
+                                                        {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
+                                                            <div className="text-gray-600 text-xs">
+                                                                [{e.tStart ?? "—"} … {e.tEnd ?? "—"}]
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
                                             </div>
-                                        )}
-                                    </div>
-                                )}
+                                        );
+                                    })}
+                                </div>
                             </li>
-                        );
-                    })}
-                    {!nearby.length && ticks.length > 0 && !showAll && (
-                        <li className="text-xs text-gray-500">
-                            no events near the current time. Try <button className="underline" onClick={() => setShowAll(true)}>show all</button>.
-                        </li>
-                    )}
+                        ))}
+
+                        {!renderGroups.length && !showAll && (
+                            <li className="text-xs text-gray-500">
+                                no events near the current time. Try{" "}
+                                <button className="underline" onClick={() => setShowAll(true)}>show all</button>.
+                            </li>
+                        )}
+                    </ul>
                 </ul>
             </div>
         </div>

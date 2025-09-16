@@ -44,7 +44,12 @@ export default function ReplayPage({ sessionId }) {
         const out = [];
         for (const a of actions || []) {
             for (const r of a.requests || []) {
-                out.push({ kind: "request", t: r.t, meta: { method: r.method, url: r.url, status: r.status, durMs: r.durMs } });
+                out.push({
+                    kind: "request",
+                    actionId: a.actionId,                 // keep the actionId
+                    t: r.t,
+                    meta: { method: r.method, url: r.url, status: r.status, durMs: r.durMs, rid: r.rid },
+                });
             }
         }
         return out;
@@ -53,7 +58,17 @@ export default function ReplayPage({ sessionId }) {
         const out = [];
         for (const a of actions || []) {
             for (const d of a.db || []) {
-                out.push({ kind: "db", t: d.t, meta: { collection: d.collection, op: d.op, query: d.query, resultMeta: d.resultMeta } });
+                out.push({
+                    kind: "db",
+                    actionId: a.actionId,                 // keep the actionId
+                    t: d.t,
+                    meta: {
+                        collection: d.collection,
+                        op: d.op,
+                        query: d.query,
+                        resultMeta: d.resultMeta,
+                    },
+                });
             }
         }
         return out;
@@ -62,14 +77,24 @@ export default function ReplayPage({ sessionId }) {
         const out = [];
         for (const a of actions || []) {
             for (const m of a.emails || []) {
-                out.push({ kind: "email", t: m.t, meta: { subject: m.subject, to: m.to, statusCode: m.statusCode } });
+                out.push({
+                    kind: "email",
+                    actionId: a.actionId,                 // keep the actionId
+                    t: m.t,
+                    meta: { subject: m.subject, to: m.to, statusCode: m.statusCode },
+                });
             }
         }
         return out;
     };
-    const flattenActions = (actions) => (actions || []).map((a) => ({
-        kind: "action", tStart: a.tStart, tEnd: a.tEnd, actionId: a.actionId, label: a.label,
-    }));
+    const flattenActions = (actions) =>
+        (actions || []).map((a) => ({
+            kind: "action",
+            actionId: a.actionId,                     // keep the actionId
+            tStart: a.tStart,
+            tEnd: a.tEnd,
+            label: a.label,
+        }));
 
     const computeClockOffset = (rrwebFirstTs, actions, requests) => {
         rrwebFirstTsRef.current = rrwebFirstTs || 0;
