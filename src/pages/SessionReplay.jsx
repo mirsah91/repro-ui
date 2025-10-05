@@ -3,6 +3,7 @@ import { Replayer } from "rrweb";
 import "rrweb/dist/rrweb.min.css";
 import useTimeline from "../hooks/useTimeline";
 import { decodeBase64JsonArray } from "../lib/rrwebDecode";
+import EmailItem from "../components/EmailItem.jsx";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 const WINDOW_MS = 1500;
@@ -538,14 +539,14 @@ export default function SessionReplay({ sessionId }) {
                                                     </div>
                                                 )}
 
-                                                {e.kind === "email" && (
-                                                    <div className="text-sm">
-                                                        <div className="font-mono break-all">{e.meta?.subject}</div>
-                                                        <div className="text-gray-600 text-xs">
-                                                            to: {(e.meta?.to || []).map(a => a?.email || a).join(", ")} • {e.meta?.statusCode ?? "—"}
-                                                        </div>
-                                                    </div>
-                                                )}
+                                                {/*{e.kind === "email" && (*/}
+                                                {/*    <div className="text-sm">*/}
+                                                {/*        <div className="font-mono break-all">{e.meta?.subject}</div>*/}
+                                                {/*        <div className="text-gray-600 text-xs">*/}
+                                                {/*            to: {(e.meta?.to || []).map(a => a?.email || a).join(", ")} • {e.meta?.statusCode ?? "—"}*/}
+                                                {/*        </div>*/}
+                                                {/*    </div>*/}
+                                                {/*)}*/}
 
                                                 {e.kind === "action" && (
                                                     <div className="text-sm">
@@ -557,6 +558,8 @@ export default function SessionReplay({ sessionId }) {
                                                         )}
                                                     </div>
                                                 )}
+
+                                                {e.kind === "email" && <EmailItem meta={e.meta} />}
                                             </div>
                                         );
                                     })}
