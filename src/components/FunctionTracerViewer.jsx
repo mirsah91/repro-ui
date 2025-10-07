@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./FunctionTracerViewer.css";
 
 const DEFAULT_VISIBLE_DEPTH = 4;
@@ -118,6 +118,107 @@ function formatDuration(ms) {
   return `${(ms / 3600000).toFixed(1)} h`;
 }
 
+function inferLanguageFromFile(filePath) {
+  if (!filePath) return "text";
+  const match = /\.([^.\s]+)$/.exec(filePath);
+  if (!match) return "text";
+  const extension = match[1].toLowerCase();
+  const map = {
+    js: "javascript",
+    jsx: "javascript",
+    ts: "typescript",
+    tsx: "typescript",
+    mjs: "javascript",
+    cjs: "javascript",
+    json: "json",
+    py: "python",
+    rb: "ruby",
+    java: "java",
+    go: "go",
+    rs: "rust",
+    php: "php",
+    html: "html",
+    css: "css",
+    scss: "scss",
+    sass: "scss",
+    less: "less",
+    md: "markdown",
+    sh: "shell",
+    bash: "shell",
+    yml: "yaml",
+    yaml: "yaml",
+    c: "c",
+    h: "c",
+    cpp: "cpp",
+    cxx: "cpp",
+    cc: "cpp",
+    cs: "csharp",
+    swift: "swift",
+    kt: "kotlin",
+    m: "objective-c",
+    mm: "objective-c",
+  };
+  return map[extension] || extension;
+}
+
+function normalizeSourcePayload(payload, item) {
+  if (payload == null) return null;
+
+  const fallbackHighlight = Number.isFinite(Number(item?.line)) ? Number(item.line) : null;
+  const fallbackLanguage = inferLanguageFromFile(item?.file);
+
+  if (typeof payload === "string") {
+    return {
+      content: payload,
+      language: fallbackLanguage,
+      startLine: 1,
+      highlightLine: fallbackHighlight,
+    };
+  }
+
+  if (Array.isArray(payload)) {
+    return {
+      content: payload.join("\n"),
+      language: fallbackLanguage,
+      startLine: 1,
+      highlightLine: fallbackHighlight,
+    };
+  }
+
+  if (typeof payload === "object") {
+    const rawContent =
+      typeof payload.content === "string"
+        ? payload.content
+        : typeof payload.code === "string"
+        ? payload.code
+        : Array.isArray(payload.lines)
+        ? payload.lines.join("\n")
+        : "";
+
+    const startLine = Number.isFinite(Number(payload.startLine))
+      ? Math.max(1, Number(payload.startLine))
+      : 1;
+
+    const highlightLine = Number.isFinite(Number(payload.highlightLine))
+      ? Number(payload.highlightLine)
+      : fallbackHighlight;
+
+    const language =
+      typeof payload.language === "string" && payload.language.trim()
+        ? payload.language
+        : fallbackLanguage;
+
+    return {
+      content: rawContent,
+      language,
+      startLine,
+      highlightLine,
+    };
+  }
+
+  return null;
+}
+
 function formatTimestamp(value) {
   if (!Number.isFinite(value)) return "-";
   try {
@@ -179,7 +280,7 @@ function buildTypeMeta(trace) {
   return meta;
 }
 
-function FunctionTracerViewer({ trace = [] }) {
+function FunctionTracerViewer({ trace = [], loadSource = null }) {
   const sortedTrace = useMemo(
     () =>
       [...trace]
@@ -198,6 +299,9 @@ function FunctionTracerViewer({ trace = [] }) {
   const [depthLimitEnabled, setDepthLimitEnabled] = useState(true);
   const [depthLimit, setDepthLimit] = useState(DEFAULT_VISIBLE_DEPTH);
   const [activeTypes, setActiveTypes] = useState(() => new Set(typeKeys));
+  const [selectedNodeIndex, setSelectedNodeIndex] = useState(null);
+  const [sourceCache, setSourceCache] = useState({});
+  const sourceCacheRef = useRef(sourceCache);
 
   useEffect(() => {
     setActiveTypes((previous) => {
@@ -256,6 +360,27 @@ function FunctionTracerViewer({ trace = [] }) {
     () => flattenTree(filteredTree, []),
     [filteredTree],
   );
+
+  useEffect(() => {
+    if (!flattenedVisibleNodes.length) {
+      if (selectedNodeIndex !== null) {
+        setSelectedNodeIndex(null);
+      }
+      return;
+    }
+
+    const exists = flattenedVisibleNodes.some(
+      (node) => node.item.index === selectedNodeIndex,
+    );
+
+    if (!exists) {
+      setSelectedNodeIndex(flattenedVisibleNodes[0].item.index);
+    }
+  }, [flattenedVisibleNodes, selectedNodeIndex]);
+
+  useEffect(() => {
+    sourceCacheRef.current = sourceCache;
+  }, [sourceCache]);
 
   const totalEvents = sortedTrace.length;
   const visibleEvents = flattenedVisibleNodes.length;
@@ -333,12 +458,131 @@ function FunctionTracerViewer({ trace = [] }) {
     setCollapsedNodes(new Set());
   };
 
+  const handleSelectNode = useCallback((index) => {
+    setSelectedNodeIndex(index);
+  }, []);
+
+  const updateSourceCache = useCallback((updater) => {
+    setSourceCache((previous) => {
+      const next =
+        typeof updater === "function" ? updater(previous) : updater || {};
+      sourceCacheRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const startLoadSource = useCallback(
+    (item, cacheKey) => {
+      if (!item || !cacheKey || typeof loadSource !== "function") {
+        return () => {};
+      }
+
+      let cancelled = false;
+
+      updateSourceCache((previous) => ({
+        ...previous,
+        [cacheKey]: { status: "loading" },
+      }));
+
+      Promise.resolve()
+        .then(() => loadSource(item))
+        .then((result) => {
+          if (cancelled) return;
+          updateSourceCache((previous) => ({
+            ...previous,
+            [cacheKey]: { status: "success", data: result },
+          }));
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          const message = error instanceof Error ? error.message : String(error);
+          updateSourceCache((previous) => ({
+            ...previous,
+            [cacheKey]: { status: "error", error: message },
+          }));
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    },
+    [loadSource, updateSourceCache],
+  );
+
+  const selectedNode = useMemo(() => {
+    if (selectedNodeIndex === null) return null;
+    return (
+      flattenedVisibleNodes.find((node) => node.item.index === selectedNodeIndex) ||
+      null
+    );
+  }, [flattenedVisibleNodes, selectedNodeIndex]);
+
+  const selectedItem = selectedNode?.item;
+  const selectedType = selectedItem?.type || "unknown";
+  const selectedTypeMeta = selectedItem
+    ? typeMeta[selectedType] || { label: toTitleCase(selectedType), color: "#6b7280" }
+    : null;
+
+  const inlineSource = useMemo(() => {
+    if (!selectedItem) return null;
+    if (selectedItem.source) return selectedItem.source;
+    if (selectedItem.code) return selectedItem.code;
+    if (selectedItem.snippet) return selectedItem.snippet;
+    if (Array.isArray(selectedItem.lines)) {
+      return { lines: selectedItem.lines, startLine: selectedItem.startLine };
+    }
+    return null;
+  }, [selectedItem]);
+
+  const inlineSourceNormalized = useMemo(
+    () => normalizeSourcePayload(inlineSource, selectedItem),
+    [inlineSource, selectedItem],
+  );
+
+  const cacheKey = selectedItem?.file ? `${selectedItem.file}` : null;
+  const cachedEntry = cacheKey ? sourceCache[cacheKey] : null;
+  const cachedSourceNormalized = useMemo(() => {
+    if (!cachedEntry || cachedEntry.status !== "success") return null;
+    return normalizeSourcePayload(cachedEntry.data, selectedItem);
+  }, [cachedEntry, selectedItem]);
+
+  const activeSource = inlineSourceNormalized || cachedSourceNormalized;
+  const isLoadingSource = Boolean(
+    !inlineSourceNormalized && cachedEntry && cachedEntry.status === "loading",
+  );
+  const sourceError = !inlineSourceNormalized && cachedEntry?.status === "error"
+    ? cachedEntry.error
+    : null;
+
+  useEffect(() => {
+    if (!cacheKey || inlineSourceNormalized || typeof loadSource !== "function") {
+      return undefined;
+    }
+
+    if (sourceCacheRef.current[cacheKey]) {
+      return undefined;
+    }
+
+    return startLoadSource(selectedItem, cacheKey);
+  }, [cacheKey, inlineSourceNormalized, loadSource, selectedItem, startLoadSource]);
+
+  const handleReloadSource = useCallback(() => {
+    if (!selectedItem || !cacheKey) return;
+    startLoadSource(selectedItem, cacheKey);
+  }, [cacheKey, selectedItem, startLoadSource]);
+
+  const highlightedLineRef = useRef(null);
+  const assignHighlightedLine = useCallback((node) => {
+    highlightedLineRef.current = node;
+  }, []);
+
   const renderNode = (node, depth, path) => {
     const nodeId = `${path.join(".")}-${node.id}`;
     const type = node.item.type || "unknown";
     const meta = typeMeta[type] || { label: toTitleCase(type), color: "#6b7280" };
     const hasChildren = node.children.length > 0;
     const isCollapsed = collapsedNodes.has(nodeId);
+    const isSelected = node.item.index === selectedNodeIndex;
     const indentation = depth * 1.25;
     const timestamp = Number(node.item.t);
     const relativeTime = Number.isFinite(timestamp) && Number.isFinite(minTime) ? timestamp - minTime : NaN;
@@ -349,16 +593,37 @@ function FunctionTracerViewer({ trace = [] }) {
     return (
       <div className="trace-node" key={nodeId}>
         <div
-          className={`trace-node__row${node.matches ? " trace-node__row--match" : ""}`}
+          className={`trace-node__row${node.matches ? " trace-node__row--match" : ""}${
+            isSelected ? " trace-node__row--selected" : ""
+          }`}
           style={{ paddingLeft: `${indentation}rem` }}
+          role="button"
+          tabIndex={0}
+          aria-selected={isSelected}
+          onClick={(event) => {
+            handleSelectNode(node.item.index);
+            if (event.currentTarget && typeof event.currentTarget.focus === "function") {
+              event.currentTarget.focus();
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              handleSelectNode(node.item.index);
+            }
+          }}
         >
           <div className="trace-node__main">
             {hasChildren ? (
               <button
                 type="button"
                 className="trace-node__toggle"
-                onClick={() => handleToggleCollapse(nodeId)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleToggleCollapse(nodeId);
+                }}
                 aria-label={isCollapsed ? "Expand" : "Collapse"}
+                aria-expanded={!isCollapsed}
               >
                 {isCollapsed ? "▸" : "▾"}
               </button>
@@ -432,6 +697,38 @@ function FunctionTracerViewer({ trace = [] }) {
       </div>
     );
   };
+
+  const selectedTimestamp = selectedItem ? Number(selectedItem.t) : NaN;
+  const selectedRelativeTime =
+    Number.isFinite(selectedTimestamp) && Number.isFinite(minTime)
+      ? selectedTimestamp - minTime
+      : NaN;
+  const selectedDuration = selectedItem
+    ? durationMap.get(selectedItem.index) || null
+    : null;
+  const selectedDepth = ensureDepth(selectedItem?.depth, 0);
+  const selectedFileLabel = selectedItem?.file
+    ? `${selectedItem.file}${selectedItem.line ? `:${selectedItem.line}` : ""}`
+    : null;
+  const highlightLineNumber = Number.isFinite(Number(activeSource?.highlightLine))
+    ? Number(activeSource.highlightLine)
+    : Number.isFinite(Number(selectedItem?.line))
+    ? Number(selectedItem.line)
+    : null;
+  const codeStartLine = Number.isFinite(Number(activeSource?.startLine))
+    ? Number(activeSource.startLine)
+    : 1;
+  const codeLines = activeSource
+    ? activeSource.content.split(/\r?\n/)
+    : [];
+  const codeLanguage = activeSource?.language || inferLanguageFromFile(selectedItem?.file);
+  const hasHighlightLine = Number.isFinite(highlightLineNumber);
+
+  useEffect(() => {
+    if (highlightedLineRef.current) {
+      highlightedLineRef.current.scrollIntoView({ block: "center" });
+    }
+  }, [activeSource?.content, highlightLineNumber, selectedNodeIndex]);
 
   return (
     <div className="trace-viewer">
@@ -545,9 +842,135 @@ function FunctionTracerViewer({ trace = [] }) {
             <p className="trace-empty__hint">Try clearing the search, enabling more event types, or showing all depths.</p>
           </div>
         ) : (
-          <div className="trace-tree">
-            {filteredTree.map((node, index) => renderNode(node, ensureDepth(node.item.depth, 0), [index]))}
-          </div>
+          <>
+            <div className="trace-tree">
+              {filteredTree.map((node, index) =>
+                renderNode(node, ensureDepth(node.item.depth, 0), [index]),
+              )}
+            </div>
+            <aside className="trace-panel">
+              {selectedItem ? (
+                <>
+                  <div className="trace-panel__header">
+                    <div className="trace-panel__titles">
+                      <h2 className="trace-panel__title">{selectedItem.fn || "anonymous"}</h2>
+                      {selectedFileLabel ? (
+                        <div className="trace-panel__subtitle" title={selectedFileLabel}>
+                          {selectedFileLabel}
+                        </div>
+                      ) : null}
+                    </div>
+                    {selectedTypeMeta ? (
+                      <span
+                        className="trace-panel__type"
+                        style={{
+                          borderColor: selectedTypeMeta.color,
+                          color: selectedTypeMeta.color,
+                        }}
+                      >
+                        {selectedTypeMeta.label}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="trace-panel__meta">
+                    <div className="trace-panel__meta-item">
+                      <span className="trace-panel__meta-key">Since start</span>
+                      <span className="trace-panel__meta-value">
+                        {Number.isFinite(selectedRelativeTime)
+                          ? formatDuration(selectedRelativeTime)
+                          : "—"}
+                      </span>
+                    </div>
+                    <div className="trace-panel__meta-item">
+                      <span className="trace-panel__meta-key">Timestamp</span>
+                      <span className="trace-panel__meta-value">
+                        {Number.isFinite(selectedTimestamp)
+                          ? formatTimestamp(selectedTimestamp)
+                          : "—"}
+                      </span>
+                    </div>
+                    <div className="trace-panel__meta-item">
+                      <span className="trace-panel__meta-key">Depth</span>
+                      <span className="trace-panel__meta-value">{selectedDepth}</span>
+                    </div>
+                    <div className="trace-panel__meta-item">
+                      <span className="trace-panel__meta-key">Event</span>
+                      <span className="trace-panel__meta-value">
+                        #{(selectedItem.index || 0) + 1} of {totalEvents}
+                      </span>
+                    </div>
+                    <div className="trace-panel__meta-item">
+                      <span className="trace-panel__meta-key">Next delta</span>
+                      <span className="trace-panel__meta-value">
+                        {Number.isFinite(Number(selectedDuration))
+                          ? formatDuration(Number(selectedDuration))
+                          : "—"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="trace-panel__code">
+                    <div className="trace-code__toolbar">
+                      <span className="trace-code__language">
+                        {(codeLanguage || "text").toUpperCase()}
+                      </span>
+                      {highlightLineNumber ? (
+                        <span className="trace-code__line-indicator">
+                          Line {highlightLineNumber}
+                        </span>
+                      ) : null}
+                    </div>
+                    {activeSource ? (
+                      <div className="trace-code__body">
+                        <pre className="trace-code__pre">
+                          {codeLines.map((line, lineIndex) => {
+                            const lineNumber = codeStartLine + lineIndex;
+                            const isHighlight = hasHighlightLine && lineNumber === highlightLineNumber;
+                            return (
+                              <div
+                                key={lineNumber}
+                                className={`trace-code__line${
+                                  isHighlight ? " trace-code__line--highlight" : ""
+                                }`}
+                                ref={isHighlight ? assignHighlightedLine : null}
+                              >
+                                <span className="trace-code__line-number">{lineNumber}</span>
+                                <span className="trace-code__line-content">
+                                  {line || "\u00a0"}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </pre>
+                      </div>
+                    ) : isLoadingSource ? (
+                      <div className="trace-panel__message">Loading source…</div>
+                    ) : sourceError ? (
+                      <div className="trace-panel__message">
+                        <p>Unable to load source: {sourceError}</p>
+                        {typeof loadSource === "function" ? (
+                          <button
+                            type="button"
+                            className="trace-panel__retry"
+                            onClick={handleReloadSource}
+                          >
+                            Try again
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="trace-panel__message">
+                        <p>Provide trace <code>source</code> data or a <code>loadSource</code> prop to preview code.</p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="trace-panel__placeholder">
+                  Select a trace event to inspect its details and source code.
+                </div>
+              )}
+            </aside>
+          </>
         )}
       </div>
     </div>
