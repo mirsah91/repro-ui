@@ -166,7 +166,7 @@ export default function SessionReplay({ sessionId }) {
     const rrwebZeroTsRef = useRef(null); // first rrweb event timestamp (epoch ms)
     const lastPausedTimeRef = useRef(0);
 
-    const { meta, status, queueRef, pullMore, doneRef } = useRrwebStream(sessionId);
+    const { status, queueRef, pullMore, doneRef } = useRrwebStream(sessionId);
     const rawTicks = useTimeline(sessionId); // backend events (server time)
 
     const [currentTime, setCurrentTime] = useState(0); // rrweb virtual ms
@@ -231,12 +231,6 @@ export default function SessionReplay({ sessionId }) {
             absInWindow(absNow, ev._startServer, ev._endServer, WINDOW_MS)
         );
     }, [ticks, showAll, absNow]);
-
-    // final list to render: grouped by action, then flattened (Action → Request → DB → Email)
-    const renderList = useMemo(() => {
-        const groups = groupByAction(baseItems);
-        return flattenGrouped(groups);
-    }, [baseItems]);
 
     // groups to render (Action → Request → DB → Email)
     const renderGroups = React.useMemo(() => {
@@ -538,16 +532,6 @@ export default function SessionReplay({ sessionId }) {
                                                         )}
                                                     </div>
                                                 )}
-
-                                                {/*{e.kind === "email" && (*/}
-                                                {/*    <div className="text-sm">*/}
-                                                {/*        <div className="font-mono break-all">{e.meta?.subject}</div>*/}
-                                                {/*        <div className="text-gray-600 text-xs">*/}
-                                                {/*            to: {(e.meta?.to || []).map(a => a?.email || a).join(", ")} • {e.meta?.statusCode ?? "—"}*/}
-                                                {/*        </div>*/}
-                                                {/*    </div>*/}
-                                                {/*)}*/}
-
                                                 {e.kind === "action" && (
                                                     <div className="text-sm">
                                                         <div className="font-mono break-all">{e.label || e.actionId}</div>
@@ -558,7 +542,6 @@ export default function SessionReplay({ sessionId }) {
                                                         )}
                                                     </div>
                                                 )}
-
                                                 {e.kind === "email" && <EmailItem meta={e.meta} />}
                                             </div>
                                         );
@@ -566,7 +549,6 @@ export default function SessionReplay({ sessionId }) {
                                 </div>
                             </li>
                         ))}
-
                         {!renderGroups.length && !showAll && (
                             <li className="text-xs text-gray-500">
                                 no events near the current time. Try{" "}
