@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Function Trace Prototype</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0f1a;
+        --panel: #131a2a;
+        --panel-border: #1f2a3f;
+        --accent: #4b7cf3;
+        --accent-soft: rgba(75, 124, 243, 0.2);
+        --text: #e9efff;
+        --muted: #8d9bb7;
+        --danger: #f36f5b;
+        --success: #4cd19a;
+        font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+      }
+
+      body {
+        background: radial-gradient(circle at top, #1a2540, #05060a 55%);
+        color: var(--text);
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      header {
+        padding: 24px clamp(24px, 5vw, 56px) 16px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(28px, 4vw, 36px);
+        letter-spacing: -0.5px;
+      }
+
+      .subtitle {
+        margin-top: 8px;
+        color: var(--muted);
+        max-width: 680px;
+      }
+
+      .prototype-shell {
+        flex: 1;
+        display: grid;
+        grid-template-columns: minmax(320px, 480px) minmax(420px, 1fr);
+        gap: 24px;
+        padding: 0 clamp(24px, 5vw, 56px) 40px;
+      }
+
+      .panel {
+        background: linear-gradient(160deg, rgba(26, 32, 48, 0.95), rgba(10, 14, 24, 0.95));
+        border: 1px solid rgba(84, 113, 191, 0.18);
+        border-radius: 18px;
+        box-shadow: 0 20px 40px rgba(8, 12, 24, 0.55);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+      }
+
+      .panel::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        border: 1px solid rgba(92, 130, 255, 0.08);
+        mask: linear-gradient(#fff, transparent 70%);
+        pointer-events: none;
+      }
+
+      .panel-header {
+        padding: 18px 22px 14px;
+        border-bottom: 1px solid rgba(92, 130, 255, 0.08);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        background: rgba(16, 22, 36, 0.75);
+        backdrop-filter: blur(12px);
+      }
+
+      .controls {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .control {
+        flex: 1;
+        min-width: 140px;
+        position: relative;
+      }
+
+      .control input,
+      .control select {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(92, 130, 255, 0.2);
+        background: rgba(14, 19, 30, 0.8);
+        color: inherit;
+        font-size: 14px;
+        font-family: inherit;
+        outline: none;
+      }
+
+      .control input:focus,
+      .control select:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(75, 124, 243, 0.25);
+      }
+
+      .trace-scroll {
+        flex: 1;
+        overflow: auto;
+        padding: 14px 6px 18px 16px;
+      }
+
+      .trace-tree {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .trace-row {
+        position: relative;
+        border-radius: 12px;
+        padding: 10px 12px 10px calc(16px + var(--depth) * 22px);
+        cursor: pointer;
+        transition: transform 0.15s ease, background 0.15s ease;
+      }
+
+      .trace-row::before {
+        content: "";
+        position: absolute;
+        left: calc(8px + var(--depth) * 22px);
+        top: 50%;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--accent);
+        transform: translateY(-50%);
+        box-shadow: 0 0 0 6px rgba(75, 124, 243, 0.18);
+      }
+
+      .trace-row:hover {
+        transform: translateX(4px);
+        background: rgba(75, 124, 243, 0.08);
+      }
+
+      .trace-row.selected {
+        background: rgba(75, 124, 243, 0.14);
+        box-shadow: inset 0 0 0 1px rgba(75, 124, 243, 0.35);
+      }
+
+      .trace-meta {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 13px;
+      }
+
+      .type-chip {
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: rgba(75, 124, 243, 0.18);
+        color: var(--accent);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .file-path {
+        color: var(--muted);
+        font-family: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo,
+          Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 12px;
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .timestamp {
+        font-variant-numeric: tabular-nums;
+        color: #9fb2e0;
+      }
+
+      .detail-body {
+        padding: 18px 22px 22px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        flex: 1;
+        overflow: auto;
+      }
+
+      .detail-card {
+        background: rgba(18, 24, 40, 0.75);
+        border-radius: 16px;
+        border: 1px solid rgba(92, 130, 255, 0.12);
+        padding: 16px 18px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .detail-card h3 {
+        margin: 0;
+        font-size: 16px;
+        letter-spacing: 0.01em;
+      }
+
+      .detail-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 12px;
+        font-size: 13px;
+      }
+
+      .detail-label {
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        font-weight: 600;
+        margin-bottom: 4px;
+        font-size: 11px;
+      }
+
+      .code-block {
+        background: rgba(5, 8, 15, 0.8);
+        border-radius: 14px;
+        border: 1px solid rgba(92, 130, 255, 0.1);
+        padding: 16px 0;
+        font-family: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo,
+          Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 13px;
+        overflow: auto;
+        position: relative;
+      }
+
+      .code-line {
+        display: flex;
+      }
+
+      .code-line-number {
+        width: 48px;
+        padding-right: 16px;
+        text-align: right;
+        color: rgba(157, 170, 204, 0.55);
+        user-select: none;
+      }
+
+      .code-line.highlight {
+        background: linear-gradient(90deg, rgba(75, 124, 243, 0.14), transparent 70%);
+      }
+
+      .code-line.highlight .code-line-number {
+        color: var(--accent);
+        font-weight: 600;
+      }
+
+      .args-table {
+        border-collapse: collapse;
+        width: 100%;
+        background: rgba(12, 18, 32, 0.85);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+
+      .args-table th,
+      .args-table td {
+        border-bottom: 1px solid rgba(92, 130, 255, 0.08);
+        padding: 10px 14px;
+        text-align: left;
+        font-size: 13px;
+      }
+
+      .args-table th {
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        font-weight: 600;
+      }
+
+      .args-table tr:last-child td {
+        border-bottom: none;
+      }
+
+      .empty-state {
+        color: var(--muted);
+        font-style: italic;
+        text-align: center;
+        padding: 24px 0;
+      }
+
+      @media (max-width: 1080px) {
+        .prototype-shell {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Function Trace Exploration (Concept)</h1>
+      <p class="subtitle">
+        A concept mock that renders deeply nested trace events as an interactive tree with an
+        inspector. Use the controls to search, filter by event type, or focus on specific depths.
+      </p>
+    </header>
+    <main class="prototype-shell">
+      <section class="panel" id="treePanel">
+        <div class="panel-header">
+          <div class="controls">
+            <label class="control">
+              <input id="searchInput" type="search" placeholder="Search by function, file, or argument" />
+            </label>
+            <label class="control">
+              <select id="typeFilter">
+                <option value="">All event types</option>
+              </select>
+            </label>
+            <label class="control">
+              <select id="depthFilter">
+                <option value="">All depths</option>
+                <option value="0">Root only</option>
+                <option value="1">Depth ≤ 1</option>
+                <option value="2">Depth ≤ 2</option>
+                <option value="3">Depth ≤ 3</option>
+                <option value="4">Depth ≤ 4</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div class="trace-scroll">
+          <div id="traceTree" class="trace-tree"></div>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-header">
+          <h2 style="margin: 0; font-size: 18px">Inspector</h2>
+        </div>
+        <div class="detail-body" id="detailBody">
+          <p class="empty-state">Select an event to inspect metadata and code context.</p>
+        </div>
+      </section>
+    </main>
+    <script>
+      const trace = [
+        {
+          t: 1760122316712,
+          type: "enter",
+          fn: "enter",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.controller.ts",
+          line: null,
+          depth: 1,
+          args: [
+            "create",
+            {
+              file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.controller.ts",
+              line: 11,
+            },
+          ],
+        },
+        {
+          t: 1760122316712,
+          type: "enter",
+          fn: "create",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.controller.ts",
+          line: 11,
+          depth: 2,
+        },
+        {
+          t: 1760122316712,
+          type: "exit",
+          fn: "enter",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.controller.ts",
+          line: null,
+          depth: 2,
+        },
+        {
+          t: 1760122316712,
+          type: "enter",
+          fn: "enter",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: null,
+          depth: 2,
+          args: [
+            "create",
+            {
+              file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+              line: 17,
+            },
+          ],
+        },
+        {
+          t: 1760122316712,
+          type: "enter",
+          fn: "create",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: 17,
+          depth: 3,
+        },
+        {
+          t: 1760122316712,
+          type: "exit",
+          fn: "enter",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: null,
+          depth: 3,
+        },
+        {
+          t: 1760122316712,
+          type: "enter",
+          fn: "create",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: 18,
+          depth: 3,
+          args: [
+            {
+              name: "one",
+              status: "NEW",
+            },
+          ],
+        },
+        {
+          t: 1760122316715,
+          type: "enter",
+          fn: "exit",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.controller.ts",
+          line: null,
+          depth: 4,
+          args: [
+            {
+              fn: "create",
+              file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.controller.ts",
+              line: 11,
+            },
+          ],
+        },
+        {
+          t: 1760122316716,
+          type: "exit",
+          fn: "create",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.controller.ts",
+          line: 11,
+          depth: 4,
+        },
+        {
+          t: 1760122316716,
+          type: "exit",
+          fn: "exit",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.controller.ts",
+          line: null,
+          depth: 3,
+        },
+        {
+          t: 1760122316735,
+          type: "exit",
+          fn: "create",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: 18,
+          depth: 2,
+          returnValue: {
+            name: "one",
+            status: "NEW",
+            credits: 0,
+            _id: "68e955ccc6ce836b496735a8",
+            comments: [],
+            createdAt: "2025-10-10T18:51:56.717Z",
+            updatedAt: "2025-10-10T18:51:56.717Z",
+            __v: 0,
+          },
+        },
+        {
+          t: 1760122316735,
+          type: "enter",
+          fn: "enter",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: null,
+          depth: 2,
+          args: [
+            "test",
+            {
+              file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+              line: 15,
+            },
+          ],
+        },
+        {
+          t: 1760122316735,
+          type: "enter",
+          fn: "test",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: 15,
+          depth: 3,
+        },
+        {
+          t: 1760122316735,
+          type: "exit",
+          fn: "enter",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: null,
+          depth: 3,
+        },
+        {
+          t: 1760122316735,
+          type: "enter",
+          fn: "log",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: 15,
+          depth: 3,
+          args: ["test"],
+        },
+        {
+          t: 1760122316735,
+          type: "enter",
+          fn: "console.log",
+          file: "node:console",
+          line: null,
+          depth: 4,
+        },
+        {
+          t: 1760122316735,
+          type: "exit",
+          fn: "console.log",
+          file: "node:console",
+          line: null,
+          depth: 4,
+        },
+        {
+          t: 1760122316735,
+          type: "exit",
+          fn: "log",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: 15,
+          depth: 3,
+        },
+        {
+          t: 1760122316735,
+          type: "enter",
+          fn: "enter",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: null,
+          depth: 3,
+          args: [
+            "foo",
+            {
+              file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+              line: 14,
+            },
+          ],
+        },
+        {
+          t: 1760122316735,
+          type: "enter",
+          fn: "foo",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: 14,
+          depth: 4,
+        },
+        {
+          t: 1760122316735,
+          type: "exit",
+          fn: "enter",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: null,
+          depth: 4,
+        },
+        {
+          t: 1760122316735,
+          type: "enter",
+          fn: "exit",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: null,
+          depth: 4,
+          args: [
+            {
+              fn: "foo",
+              file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+              line: 14,
+            },
+          ],
+        },
+        {
+          t: 1760122316735,
+          type: "exit",
+          fn: "foo",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: 14,
+          depth: 4,
+        },
+        {
+          t: 1760122316735,
+          type: "exit",
+          fn: "exit",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: null,
+          depth: 3,
+        },
+        {
+          t: 1760122316735,
+          type: "enter",
+          fn: "exit",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: null,
+          depth: 3,
+          args: [
+            {
+              fn: "test",
+              file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+              line: 15,
+            },
+          ],
+        },
+        {
+          t: 1760122316735,
+          type: "exit",
+          fn: "test",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: 15,
+          depth: 3,
+        },
+        {
+          t: 1760122316735,
+          type: "exit",
+          fn: "exit",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: null,
+          depth: 2,
+        },
+        {
+          t: 1760122316735,
+          type: "enter",
+          fn: "toObject",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: 23,
+          depth: 2,
+          args: [],
+        },
+        {
+          t: 1760122316735,
+          type: "exit",
+          fn: "toObject",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: 23,
+          depth: 2,
+          returnValue: {
+            name: "one",
+            status: "NEW",
+            credits: 0,
+            _id: "68e955ccc6ce836b496735a8",
+            comments: [],
+            createdAt: "2025-10-10T18:51:56.717Z",
+            updatedAt: "2025-10-10T18:51:56.717Z",
+            __v: 0,
+          },
+        },
+        {
+          t: 1760122316735,
+          type: "enter",
+          fn: "exit",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: null,
+          depth: 2,
+          args: [
+            {
+              fn: "create",
+              file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+              line: 17,
+            },
+          ],
+        },
+        {
+          t: 1760122316735,
+          type: "exit",
+          fn: "create",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: 17,
+          depth: 2,
+        },
+        {
+          t: 1760122316735,
+          type: "exit",
+          fn: "exit",
+          file: "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts",
+          line: null,
+          depth: 1,
+        },
+      ];
+
+      const codeSamples = {
+        "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.controller.ts": `1 import { Controller } from '@nestjs/common';
+2 
+3 @Controller('items')
+4 export class ItemsController {
+5   constructor(private readonly itemsService: ItemsService) {}
+6 
+7   @Post()
+8   create(@Body() createItemDto: CreateItemDto) {
+9     return this.itemsService.create(createItemDto);
+10  }
+11 
+12  @Get('test')
+13  test() {
+14    return this.itemsService.test();
+15  }
+16 }
+`,
+        "/Users/mihransahakyan/projects/repro/repor-nest-e2e/src/items/items.service.ts": `12 export class ItemsService {
+13   constructor(@InjectModel(Item.name) private itemModel: Model<ItemDocument>) {}
+14 
+15   async foo() {
+16     return 'foo';
+17   }
+18 
+19   async test() {
+20     console.log('test');
+21     return this.foo();
+22   }
+23 
+24   async create(createItemDto: CreateItemDto) {
+25     const createdItem = new this.itemModel(createItemDto);
+26     return createdItem.save();
+27   }
+28 }
+`,
+      };
+
+      const treeEl = document.getElementById("traceTree");
+      const detailEl = document.getElementById("detailBody");
+      const searchInput = document.getElementById("searchInput");
+      const typeFilter = document.getElementById("typeFilter");
+      const depthFilter = document.getElementById("depthFilter");
+
+      const formatTimestamp = (t) => {
+        const ms = t % 1000;
+        const date = new Date(Math.floor(t / 1000));
+        return `${date.toISOString().replace('T', ' ').replace('Z', '')}.${String(ms).padStart(3, '0')}`;
+      };
+
+      const uniqueTypes = [...new Set(trace.map((item) => item.type))];
+      uniqueTypes.forEach((type) => {
+        const option = document.createElement("option");
+        option.value = type;
+        option.textContent = type;
+        typeFilter.appendChild(option);
+      });
+
+      let selectedIndex = null;
+
+      const renderTree = () => {
+        treeEl.innerHTML = "";
+        const query = searchInput.value.trim().toLowerCase();
+        const typeValue = typeFilter.value;
+        const depthValue = depthFilter.value ? Number(depthFilter.value) : null;
+
+        trace.forEach((item, index) => {
+          if (typeValue && item.type !== typeValue) return;
+          if (depthValue !== null && item.depth > depthValue + 1) return;
+          if (query) {
+            const searchable = [item.fn, item.file, JSON.stringify(item.args), JSON.stringify(item.returnValue)]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase();
+            if (!searchable.includes(query)) return;
+          }
+
+          const row = document.createElement("div");
+          row.className = "trace-row" + (index === selectedIndex ? " selected" : "");
+          row.style.setProperty("--depth", item.depth - 1);
+          row.addEventListener("click", () => {
+            selectedIndex = index;
+            renderTree();
+            renderDetail(trace[index]);
+          });
+
+          const meta = document.createElement("div");
+          meta.className = "trace-meta";
+
+          const typeChip = document.createElement("span");
+          typeChip.className = "type-chip";
+          typeChip.textContent = item.type;
+
+          const fnName = document.createElement("strong");
+          fnName.textContent = item.fn;
+
+          const filePath = document.createElement("span");
+          filePath.className = "file-path";
+          filePath.textContent = item.file;
+
+          const timestamp = document.createElement("span");
+          timestamp.className = "timestamp";
+          timestamp.textContent = formatTimestamp(item.t);
+
+          meta.append(typeChip, fnName, filePath, timestamp);
+          row.appendChild(meta);
+
+          treeEl.appendChild(row);
+        });
+
+        if (!treeEl.children.length) {
+          const empty = document.createElement("p");
+          empty.className = "empty-state";
+          empty.textContent = "No events match your filters.";
+          treeEl.appendChild(empty);
+        }
+      };
+
+      const renderDetail = (item) => {
+        if (!item) {
+          detailEl.innerHTML = '<p class="empty-state">Select an event to inspect metadata and code context.</p>';
+          return;
+        }
+
+        const code = codeSamples[item.file];
+        const lines = code ? code.split("\n") : [];
+        detailEl.innerHTML = "";
+
+        const metaCard = document.createElement("div");
+        metaCard.className = "detail-card";
+        const metaTitle = document.createElement("h3");
+        metaTitle.textContent = `${item.type.toUpperCase()} · ${item.fn}`;
+        const grid = document.createElement("div");
+        grid.className = "detail-grid";
+
+        const makeGridItem = (label, value) => {
+          const wrap = document.createElement("div");
+          const labelEl = document.createElement("div");
+          labelEl.className = "detail-label";
+          labelEl.textContent = label;
+          const valueEl = document.createElement("div");
+          valueEl.textContent = value;
+          wrap.append(labelEl, valueEl);
+          return wrap;
+        };
+
+        grid.append(
+          makeGridItem("Timestamp", formatTimestamp(item.t)),
+          makeGridItem("Depth", item.depth),
+          makeGridItem("File", item.file || "—"),
+          makeGridItem("Line", item.line != null ? item.line : "—"),
+        );
+
+        if (item.returnValue) {
+          grid.append(makeGridItem("Return", JSON.stringify(item.returnValue, null, 2)));
+        }
+
+        metaCard.append(metaTitle, grid);
+
+        const argsCard = document.createElement("div");
+        argsCard.className = "detail-card";
+        const argsTitle = document.createElement("h3");
+        argsTitle.textContent = "Arguments";
+        argsCard.appendChild(argsTitle);
+
+        if (item.args && item.args.length) {
+          const table = document.createElement("table");
+          table.className = "args-table";
+          const head = document.createElement("thead");
+          head.innerHTML = "<tr><th>#</th><th>Value</th></tr>";
+          table.appendChild(head);
+          const tbody = document.createElement("tbody");
+          item.args.forEach((arg, idx) => {
+            const tr = document.createElement("tr");
+            const idxTd = document.createElement("td");
+            idxTd.textContent = idx + 1;
+            const valTd = document.createElement("td");
+            valTd.textContent = typeof arg === "object" ? JSON.stringify(arg, null, 2) : String(arg);
+            tr.append(idxTd, valTd);
+            tbody.appendChild(tr);
+          });
+          table.appendChild(tbody);
+          argsCard.appendChild(table);
+        } else {
+          const emptyArgs = document.createElement("div");
+          emptyArgs.className = "empty-state";
+          emptyArgs.textContent = "No arguments captured.";
+          argsCard.appendChild(emptyArgs);
+        }
+
+        const codeCard = document.createElement("div");
+        codeCard.className = "detail-card";
+        const codeTitle = document.createElement("h3");
+        codeTitle.textContent = "Source preview";
+        codeCard.appendChild(codeTitle);
+
+        if (lines.length) {
+          const codeBlock = document.createElement("div");
+          codeBlock.className = "code-block";
+          lines.forEach((line, idx) => {
+            const lineWrap = document.createElement("div");
+            lineWrap.className = "code-line" + ((item.line === idx + 1) ? " highlight" : "");
+            const number = document.createElement("span");
+            number.className = "code-line-number";
+            number.textContent = idx + 1;
+            const content = document.createElement("code");
+            content.textContent = line.replace(/\t/g, "  ");
+            lineWrap.append(number, content);
+            codeBlock.appendChild(lineWrap);
+          });
+          codeCard.appendChild(codeBlock);
+        } else {
+          const emptyCode = document.createElement("div");
+          emptyCode.className = "empty-state";
+          emptyCode.textContent = "No source snippet available for this event.";
+          codeCard.appendChild(emptyCode);
+        }
+
+        detailEl.append(metaCard, argsCard, codeCard);
+      };
+
+      const update = () => renderTree();
+      searchInput.addEventListener("input", update);
+      typeFilter.addEventListener("change", update);
+      depthFilter.addEventListener("change", update);
+
+      renderTree();
+    </script>
+  </body>
+</html>
