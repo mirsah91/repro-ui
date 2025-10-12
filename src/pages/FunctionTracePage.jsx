@@ -1,13 +1,21 @@
-import {FunctionTraceViewer} from "../components/FunctionTracerViewer.jsx";
-import {useState} from "react";
+import { useMemo } from "react";
+import { FunctionTraceViewer } from "../components/FunctionTracerViewer.jsx";
 
-// export default function Demo() {
-//     const [now, setNow] = useState(1150);
-//     const onSeek = (t) => setNow(t);
-//     return (
-//         <div className="p-4">
-//             <h1 className="text-lg font-semibold mb-2">Function Call Trace</h1>
-//             <FunctionTraceViewer trace={sample} now={now} onSeek={onSeek} />
-//         </div>
-//     );
-// }
+
+export default function FunctionTracePage() {
+  const trace = useMemo(() => [], []);
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        padding: "48px clamp(32px, 6vw, 72px)",
+        background: "radial-gradient(circle at top, rgba(42,78,170,0.4), transparent 55%), #02040a",
+        display: "flex",
+        flexDirection: "column"
+      }}
+    >
+      <FunctionTraceViewer trace={trace} title="Function Call Trace" />
+    </div>
+  );
+}
