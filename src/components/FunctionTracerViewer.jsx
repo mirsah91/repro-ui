@@ -1,253 +1,226 @@
 import React, {useMemo, useState, useCallback} from "react";
 
-/**
- * FunctionTraceViewer — JSX version (no TypeScript).
- *
- * Props:
- *  - trace: Array of { t:number, type:"enter"|"exit", fn:string, file?:string|null, line?:number|null, depth:number }
- *  - now?: number (server epoch ms) — highlights the frame active around this time
- *  - onSeek?: (t:number) => void — called when user clicks a frame; t is the function's start time (server ms)
- *  - options?: {
- *      hideInternal?: boolean      // drop tracer wrappers like fn=="enter"/"exit" (default true)
- *      minDurationMs?: number      // hide frames shorter than this duration (after pairing) (default 0)
- *      collapseVendors?: boolean   // hide frames coming from node_modules (default false)
- *    }
- */
+// --- Utilities ---
+const asNumber = (v, fb=0)=>{ const n = Number(v); return Number.isFinite(n) ? n : fb; };
 
-function isInternalWrapper(fn) {
-    return fn === "enter" || fn === "exit";
-}
+const normalizeTrace = (trace)=> trace
+    .filter(Boolean)
+    .map((e,i)=>({
+      ...e,
+      index: i,
+      type: typeof e.type === 'string' ? e.type.toLowerCase() : e.type,
+      depth: asNumber(e.depth),
+      time: asNumber(e.t, i),
+    }))
+    .sort((a,b)=> a.time!==b.time ? a.time-b.time : (a.depth!==b.depth ? a.depth-b.depth : a.index-b.index));
 
-function shortPath(p) {
-    if (!p) return "";
-    const parts = p.split("/");
-    const last = parts.slice(-2).join("/");
-    return last || p;
-}
-
-function buildFrameTree(trace, opts) {
-    const hideInternal = opts?.hideInternal !== false; // default true
-    const stack = [];
-    const roots = [];
-
-    let minT = Number.POSITIVE_INFINITY;
-    let maxT = 0;
-
-    for (const e of trace || []) {
-        minT = Math.min(minT, e.t);
-        maxT = Math.max(maxT, e.t);
-
-        if (hideInternal && isInternalWrapper(e.fn)) continue;
-
-        if (e.type === "enter") {
-            const node = {
-                id: `${e.fn}@${e.file || ""}:${e.line ?? "?"}:${e.t}:${e.depth}`,
-                fn: e.fn,
-                file: e.file,
-                line: e.line ?? undefined,
-                depth: e.depth,
-                start: e.t,
-                children: [],
-            };
-            const parent = stack[stack.length - 1];
-            if (parent) parent.children.push(node); else roots.push(node);
-            stack.push(node);
-        } else {
-            // exit — pop the most recent matching frame at <= same depth
-            for (let i = stack.length - 1; i >= 0; i--) {
-                const cand = stack[i];
-                if (cand.fn === e.fn && cand.depth === e.depth && cand.end == null) {
-                    cand.end = e.t;
-                    stack.splice(i, 1);
-                    break;
-                }
-            }
-        }
+function buildCallTree(events){
+  const stack = [];
+  const roots = [];
+  for (const event of events){
+    if (event.type === 'enter'){
+      const call = { id: `call-${event.index}`, enter: event, exit: null, children: [] };
+      if (stack.length) stack[stack.length-1].children.push(call); else roots.push(call);
+      stack.push(call);
+      continue;
     }
-
-    // Any unclosed frames get end=maxT to still render them
-    const fix = (n) => {
-        if (n.end == null) n.end = maxT;
-        n.children.forEach(fix);
-    };
-    roots.forEach(fix);
-
-    // Apply minDuration filter if requested
-    const minDur = Math.max(0, opts?.minDurationMs ?? 0);
-    if (minDur > 0) {
-        const filterDur = (nodes) => {
-            const out = [];
-            for (const n of nodes) {
-                const dur = (n.end - n.start);
-                const kids = filterDur(n.children);
-                const keep = dur >= minDur || kids.length > 0; // keep if long or has long children
-                if (keep) out.push({ ...n, children: kids });
-            }
-            return out;
-        };
-        const filtered = filterDur(roots);
-        return { roots: filtered, minT, maxT };
+    if (event.type === 'exit'){
+      const call = stack.pop();
+      if (!call){ // orphan exit
+        roots.push({ id: `orphan-exit-${event.index}`, enter: null, exit: event, children: [], orphan: true });
+      } else { call.exit = event; }
+      continue;
     }
-
-    return { roots, minT, maxT };
+    // other event type – attach as child event node
+    const node = { id: `event-${event.index}`, enter: event, exit: null, children: [], isEventOnly: true };
+    if (stack.length) stack[stack.length-1].children.push(node); else roots.push(node);
+  }
+  return roots;
 }
 
-function flatten(nodes, out = []) {
-    for (const n of nodes) {
-        out.push(n);
-        flatten(n.children, out);
-    }
-    return out;
+// JSON preview that is safe for any shape and keeps UI compact.
+function previewJSON(value){
+  if (value === null) return 'null';
+  if (value === undefined) return '—';
+  if (typeof value === 'string') return value;
+  try{ const s = JSON.stringify(value, replacer, 2); return s; }
+  catch{ return String(value); }
+}
+function replacer(_k, v){
+  if (typeof v === 'function') return '[Function]';
+  if (typeof v === 'bigint') return String(v)+'n';
+  if (v && typeof v === 'object'){
+    if (v.__type === 'Buffer' && Number.isFinite(v.length)) return `[Buffer ${v.length}]`;
+    // DO NOT collapse custom classes; show full shape
+  }
+  return v;
 }
 
-function pct(x) { return `${(x * 100).toFixed(3)}%`; }
+function trimPath(file){ if (!file) return 'unknown'; const parts = String(file).split(/[\\/]/).filter(Boolean); return parts.slice(-3).join('/'); }
+function fmtDur(start, end){ if (!Number.isFinite(start)||!Number.isFinite(end)) return null; const d=end-start; if (d<0) return null; if (d<1) return (d*1000).toFixed(2)+' µs'; if (d<1000) return d.toFixed(2)+' ms'; return (d/1000).toFixed(2)+' s'; }
 
-function classNames(...xs) {
-    return xs.filter(Boolean).join(" ");
+// --- UI Bits ---
+function Badge({children}){ return <span style={{fontSize:12,padding:'2px 6px',borderRadius:8,border:'1px solid var(--ui-border)',background:'var(--ui-bg-2)'}}>{children}</span>; }
+function Row({children, depth, selected, onClick}){
+  return (
+      <div onClick={onClick} style={{
+        marginLeft: depth*14,
+        border:'1px solid var(--ui-border)',
+        borderRadius:12,
+        padding:12,
+        background: selected? 'var(--ui-bg-sel)':'var(--ui-bg-1)',
+        boxShadow:'var(--ui-shadow)'
+      }}>{children}</div>
+  );
 }
 
-export function FunctionTraceViewer({ trace, now, onSeek, options }) {
-    const [localOpts, setLocalOpts] = useState({
-        hideInternal: options?.hideInternal !== false,
-        minDurationMs: options?.minDurationMs ?? 0,
-        collapseVendors: options?.collapseVendors ?? false,
-    });
+function Section({label, children, error}){
+  return (
+      <div style={{marginTop:8}}>
+        <div style={{fontSize:12,opacity:.7,marginBottom:4,color: error? 'var(--ui-red)': 'inherit'}}>{label}</div>
+        <pre style={{whiteSpace:'pre-wrap',wordBreak:'break-word',margin:0,fontFamily:'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',fontSize:12,background:'var(--ui-code-bg)',padding:8,borderRadius:8,border:'1px solid var(--ui-border)'}}>{children}</pre>
+      </div>
+  );
+}
 
-    const { roots, minT, maxT } = useMemo(
-        () => buildFrameTree(trace || [], localOpts),
-        [trace, localOpts.hideInternal, localOpts.minDurationMs]
-    );
+function Toggle({checked,onChange,label}){
+  return (
+      <label style={{display:'inline-flex',alignItems:'center',gap:8,cursor:'pointer'}}>
+        <input type="checkbox" checked={checked} onChange={e=>onChange(e.target.checked)} />
+        <span style={{fontSize:13}}>{label}</span>
+      </label>
+  );
+}
 
-    const all = useMemo(() => flatten(roots), [roots]);
-    const total = Math.max(1, maxT - minT);
+function CallNode({call, depth, compact, showFull}){
+  const enter = call.enter; const exit = call.exit;
+  const name = enter?.fn || exit?.fn || '(anonymous)';
+  const locationFile = enter?.file || exit?.file; const locationLine = (enter?.line ?? exit?.line);
+  const location = `${trimPath(locationFile)}${locationLine!=null? ':'+locationLine: ''}`;
+  const duration = enter && exit ? fmtDur(enter.time, exit.time) : null;
+  const [open, setOpen] = useState(depth <= 1);
 
-    // Vendor collapsing: mark frames whose file path includes node_modules
-    const isVendor = useCallback((n) => (n.file || "").includes("node_modules"), []);
+  const hasChildren = call.children?.length>0;
+  const isError = Boolean(exit?.error || exit?.threw);
 
-    const visibleRoots = useMemo(() => {
-        if (!localOpts.collapseVendors) return roots;
-        const pruneVendors = (nodes) => {
-            const out = [];
-            for (const n of nodes) {
-                const kids = pruneVendors(n.children);
-                if (isVendor(n) && kids.length === 0) continue; // drop leaf vendor
-                out.push({ ...n, children: kids });
-            }
-            return out;
-        };
-        return pruneVendors(roots);
-    }, [roots, localOpts.collapseVendors, isVendor]);
-
-    const activeId = useMemo(() => {
-        if (now == null) return null;
-        let best = null;
-        for (const n of all) {
-            if (n.start <= now && now <= (n.end ?? now)) {
-                if (!best || (n.depth > best.depth)) best = n; // deepest
-            }
-        }
-        return best?.id ?? null;
-    }, [now, all]);
-
-    const handleSeek = (n) => {
-        if (onSeek) onSeek(n.start);
-    };
-
-    const Row = ({ n }) => {
-        const dur = (n.end - n.start);
-        const left = (n.start - minT) / total;
-        const width = Math.max(0.001, dur / total);
-        const isActive = n.id === activeId;
-
-        return (
-            <div
-                className={classNames(
-                    "group rounded border p-2 mb-1 bg-white",
-                    isActive && "ring-2 ring-blue-400"
-                )}
-            >
-                <div className="flex items-center justify-between text-xs text-gray-600">
-                    <div className="font-mono truncate" title={`${n.fn} — ${n.file || ""}:${n.line ?? ""}`}>
-                        {n.fn}
-                        <span className="ml-2 text-gray-400">{shortPath(n.file)}{n.line ? `:${n.line}` : ""}</span>
-                    </div>
-                    <div className="tabular-nums">
-                        {dur}ms
-                    </div>
+  return (
+      <div style={{marginTop:10}}>
+        <Row depth={depth} selected={false}>
+          <div style={{display:'flex',justifyContent:'space-between',gap:12,alignItems:'center'}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}>
+              {hasChildren && (
+                  <button onClick={()=>setOpen(o=>!o)} title={open? 'Collapse':'Expand'} style={{border:'1px solid var(--ui-border)',background:'var(--ui-bg-2)',borderRadius:8,padding:'2px 6px'}}> {open? '−':'+'} </button>
+              )}
+              <div style={{display:'grid',gap:2,minWidth:0}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,minWidth:0}}>
+                  <strong style={{fontWeight:600,whiteSpace:'normal'}}>{name}</strong>
+                  {enter?.type && <Badge>{enter.type}</Badge>}
+                  {isError && <Badge>error</Badge>}
                 </div>
-
-                {/* timeline bar */}
-                <div
-                    className="relative mt-1 h-5 rounded bg-gray-100 overflow-hidden cursor-pointer"
-                    title={`${n.fn} (${dur}ms)`}
-                    onClick={() => handleSeek(n)}
-                >
-                    <div
-                        className="absolute top-0 bottom-0 bg-gray-400 group-hover:bg-gray-500"
-                        style={{ left: pct(left), width: pct(width) }}
-                    />
-                    <div className="absolute inset-0 pointer-events-none">
-                        <div className="h-full border-l border-gray-300" style={{ marginLeft: pct(left) }} />
-                    </div>
-                </div>
-
-                {n.children.length > 0 && (
-                    <div className="mt-2 ml-4">
-                        {n.children.map((c) => (
-                            <Row key={c.id} n={c} />
-                        ))}
-                    </div>
-                )}
+                <div style={{fontSize:12,opacity:.8,overflow:'hidden',textOverflow:'ellipsis'}}>{location}</div>
+              </div>
             </div>
-        );
-    };
-
-    return (
-        <div className="w-full">
-            {/* Controls */}
-            <div className="flex flex-wrap items-center gap-3 mb-3 text-xs">
-                <label className="flex items-center gap-2">
-                    <input
-                        type="checkbox"
-                        checked={!!localOpts.hideInternal}
-                        onChange={(e) => setLocalOpts((s) => ({ ...s, hideInternal: e.target.checked }))}
-                    />
-                    hide internal wrappers
-                </label>
-                <label className="flex items-center gap-2">
-                    <input
-                        type="checkbox"
-                        checked={!!localOpts.collapseVendors}
-                        onChange={(e) => setLocalOpts((s) => ({ ...s, collapseVendors: e.target.checked }))}
-                    />
-                    collapse vendor frames
-                </label>
-                <label className="flex items-center gap-2">
-                    min duration
-                    <input
-                        type="number"
-                        min={0}
-                        step={1}
-                        value={localOpts.minDurationMs ?? 0}
-                        onChange={(e) => setLocalOpts((s) => ({ ...s, minDurationMs: Number(e.target.value) }))}
-                        className="w-16 border rounded px-1 py-0.5"
-                    />
-                    ms
-                </label>
-                <div className="ml-auto text-gray-500">frames: {all.length}</div>
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              {duration && <Badge>{duration}</Badge>}
+              {Number.isFinite(enter?.time) && Number.isFinite(exit?.time) && (
+                  <div title="Duration bar" style={{width:120,height:6,background:'var(--ui-bg-2)',borderRadius:6,overflow:'hidden',border:'1px solid var(--ui-border)'}}>
+                    <div style={{width:'100%',height:'100%',transformOrigin:'left',transform:`scaleX(${Math.min(1, Math.max(0, (exit.time-enter.time)/(eventsGlobal.maxDur||1)))})`}} />
+                  </div>
+              )}
             </div>
-
-            {/* Tree */}
+          </div>
+          {!compact && (
+              <div style={{marginTop:8}}>
+                {!call.isEventOnly && <Section label="Arguments">{formatArgs(enter?.args, showFull)}</Section>}
+                {exit && exit.returnValue !== undefined && <Section label="Return value">{previewJSON(exit.returnValue, showFull ? 100000 : 180)}</Section>}
+                {exit && (exit.error || exit.threw) && <Section label={exit.threw? 'Threw':'Error'} error>{previewJSON(exit.error, showFull ? 100000 : 180)}</Section>}
+                {call.isEventOnly && <Section label="Event">{previewJSON(enter, showFull ? 100000 : 180)}</Section>}
+              </div>
+          )}
+        </Row>
+        {open && hasChildren && (
             <div>
-                {visibleRoots.length === 0 && (
-                    <div className="text-xs text-gray-500">no frames to display.</div>
-                )}
-                {visibleRoots.map((n) => (
-                    <Row key={n.id} n={n} />
-                ))}
+              {call.children.map(ch => <CallNode key={ch.id} call={ch} depth={depth+1} compact={compact} />)}
             </div>
-        </div>
-    );
+        )}
+      </div>
+  );
 }
 
+function formatArgs(args, showFull){
+  const limit = showFull ? 100000 : 180;
+  if (!args || args.length===0) return '—';
+  if (!Array.isArray(args)) return previewJSON(args, limit);
+  return args.map((a,i)=> args.length===1 ? previewJSON(a, limit) : `${i+1}. ${previewJSON(a, limit)}`).join('');
+}
+
+// global for simple duration bar scaling
+const eventsGlobal = { maxDur: 0 };
+
+export function FunctionTraceViewer({ trace = [], title = 'Function trace' }){
+  const events = useMemo(()=> normalizeTrace(trace), [trace]); useMemo(()=> normalizeTrace(trace), [trace]);
+  const calls = useMemo(()=> buildCallTree(events), [events]);
+
+  // compute max duration among matched enter/exit for bar scaling
+  eventsGlobal.maxDur = 0;
+  for (const e of calls){
+    const walk = (n)=>{ if (n.enter && n.exit) eventsGlobal.maxDur = Math.max(eventsGlobal.maxDur, (n.exit.time - n.enter.time)||0); (n.children||[]).forEach(walk); };
+    walk(e);
+  }
+
+  const [q, setQ] = useState('');
+  const [compact, setCompact] = useState(false);
+  const [showFull, setShowFull] = useState(true);
+  const [hideEvents, setHideEvents] = useState(true);
+
+  const filtered = useMemo(()=>{
+    const needle = q.trim().toLowerCase();
+    const match = (n)=>{
+      const enter = n.enter || {}; const exit = n.exit || {};
+      const fn = (enter.fn || exit.fn || '').toLowerCase();
+      const file = (enter.file || exit.file || '').toLowerCase();
+      const ok = (!needle || fn.includes(needle) || file.includes(needle));
+      const visible = ok && (!hideEvents || !n.isEventOnly);
+      if (!n.children || n.children.length===0) return visible;
+      return visible || n.children.some(match);
+    };
+    return calls.filter(match);
+  }, [calls, q, hideEvents]);
+
+  return (
+      <div style={{
+        '--ui-bg-1':'#0b0d10',
+        '--ui-bg-2':'#15191f',
+        '--ui-bg-sel':'#101520',
+        '--ui-code-bg':'#0e1116',
+        '--ui-border':'#2a3240',
+        '--ui-shadow':'0 1px 0 rgba(0,0,0,.2)',
+        '--ui-red':'#e45b5b',
+        color:'#d8dee9', background:'var(--ui-bg-1)', padding:16, borderRadius:16
+      }}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,gap:12}}>
+          <div style={{display:'flex',alignItems:'baseline',gap:12}}>
+            <h2 style={{margin:0,fontSize:18}}>{title}</h2>
+            <span style={{opacity:.8,fontSize:13}}>{filtered.length} root call{filtered.length===1?'':'s'}</span>
+          </div>
+          <div style={{display:'flex',gap:12,alignItems:'center'}}>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Filter by fn/file…" style={{background:'var(--ui-bg-2)',color:'inherit',border:'1px solid var(--ui-border)',borderRadius:10,padding:'6px 10px'}}/>
+            <Toggle checked={compact} onChange={setCompact} label="Compact" />
+            <Toggle checked={hideEvents} onChange={setHideEvents} label="Hide event-only" />
+            <Toggle checked={showFull} onChange={setShowFull} label="Show full values" />
+          </div>
+        </div>
+
+        {filtered.length===0 ? (
+            <div style={{opacity:.8}}>No trace events</div>
+        ) : (
+            <div>
+              {filtered.map(call => (
+                  <CallNode key={call.id} call={call} depth={0} compact={compact} showFull={showFull} />
+              ))}
+            </div>
+        )}
+      </div>
+  );
+}
 

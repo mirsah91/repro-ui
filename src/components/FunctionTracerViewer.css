@@ -1,0 +1,174 @@
+.function-tracer-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.5rem;
+  background: radial-gradient(circle at top left, rgba(37, 99, 235, 0.15), transparent 55%),
+    #0b1120;
+  color: #e2e8f0;
+  border-radius: 14px;
+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  min-height: 0;
+}
+
+.function-tracer-viewer__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+  padding-bottom: 0.75rem;
+}
+
+.function-tracer-viewer__header h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.function-tracer-viewer__header span {
+  color: #cbd5f5;
+  font-size: 0.9rem;
+}
+
+.function-tracer-viewer__tree {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  overflow: auto;
+  padding-right: 0.5rem;
+}
+
+.function-tracer-viewer--empty {
+  padding: 1.5rem;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.85);
+  color: #cbd5f5;
+  text-align: center;
+  font-weight: 500;
+}
+
+.call-node {
+  position: relative;
+}
+
+.call-node__children {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  border-left: 1px dashed rgba(148, 163, 184, 0.35);
+  margin-left: 0.75rem;
+  padding-left: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.call-card {
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.75));
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 1rem 1.25rem;
+  box-shadow: 0 12px 24px -18px rgba(15, 23, 42, 0.9), inset 0 0 0 1px rgba(15, 23, 42, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.call-card--error {
+  border-color: rgba(248, 113, 113, 0.5);
+  box-shadow: 0 16px 28px -18px rgba(239, 68, 68, 0.65), inset 0 0 0 1px rgba(248, 113, 113, 0.35);
+}
+
+.call-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.call-card__title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.call-card__fn {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.call-card__location {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  word-break: break-word;
+}
+
+.call-card__meta {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.call-card__badge {
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.2);
+  color: #bfdbfe;
+}
+
+.call-card__duration {
+  font-size: 0.85rem;
+  color: #cbd5f5;
+}
+
+.call-card__body {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.call-card__section {
+  display: grid;
+  gap: 0.35rem;
+  background: rgba(12, 20, 33, 0.8);
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.1);
+}
+
+.call-card__section--error {
+  background: rgba(248, 113, 113, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.35);
+}
+
+.call-card__label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+}
+
+.call-card__value {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "JetBrains Mono", "Fira Code", "Source Code Pro", ui-monospace, SFMono-Regular,
+    Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: #f8fafc;
+}
+
+@media (max-width: 640px) {
+  .function-tracer-viewer {
+    padding: 1rem;
+  }
+
+  .call-card {
+    padding: 0.85rem 1rem;
+  }
+}
