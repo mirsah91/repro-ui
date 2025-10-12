@@ -422,6 +422,13 @@
   background: transparent;
 }
 
+.trace-graph-wrapper .react-flow__handle {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+  border: none;
+}
+
 .trace-graph-wrapper .react-flow__edge-path {
   stroke: rgba(129, 176, 255, 0.55);
   stroke-width: 1.8;

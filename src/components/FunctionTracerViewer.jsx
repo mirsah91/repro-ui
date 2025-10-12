@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from "react";
-import ReactFlow, { Background, Controls, MiniMap } from "reactflow";
+import ReactFlow, { Background, Controls, MiniMap, Position, Handle } from "reactflow";
 import "reactflow/dist/style.css";
 import "./FunctionTraceViewer.css";
 
@@ -317,7 +317,9 @@ function buildGraphLayout(callRoots) {
         id: `${parentId}->${currentId}`,
         source: parentId,
         target: currentId,
-        type: "smoothstep"
+        type: "smoothstep",
+        sourceHandle: "out",
+        targetHandle: "in"
       });
     }
 
@@ -384,6 +386,7 @@ export function FunctionTraceViewer({ trace = [], title = "Function trace" }) {
   }, [calls, q, hideEvents]);
 
   const graph = useMemo(() => buildGraphLayout(filtered), [filtered]);
+  const nodeTypes = useMemo(() => ({ traceNode: TraceFlowNode }), []);
 
   return (
     <div className="trace-viewer">
@@ -449,18 +452,16 @@ export function FunctionTraceViewer({ trace = [], title = "Function trace" }) {
             </div>
           )
         ) : (
-          <TraceGraphView graph={graph} />
+          <TraceGraphView graph={graph} nodeTypes={nodeTypes} />
         )}
       </div>
     </div>
   );
 }
 
-const nodeTypes = { traceNode: TraceFlowNode };
-
-function TraceGraphView({ graph }) {
+function TraceGraphView({ graph, nodeTypes }) {
   return (
-    <div className="trace-graph-wrapper">
+    <div className="trace-graph-wrapper" style={{ width: "100%", height: "100%", minHeight: "420px" }}>
       <ReactFlow
         nodes={graph.nodes}
         edges={graph.edges}
@@ -499,6 +500,7 @@ function TraceFlowNode({ data }) {
 
   return (
     <div className={`graph-node-card${isError ? " is-error" : ""}${isEvent ? " is-event" : ""}`}>
+      <Handle type="target" id="in" position={Position.Left} style={{ opacity: 0 }} />
       <div className="graph-node-head">
         {!isEvent && <span className="keyword">function</span>}
         <span className="fn-name">{name}</span>
@@ -515,6 +517,7 @@ function TraceFlowNode({ data }) {
         </div>
       </div>
       {isEvent && <span className="event-badge">{enter?.type}</span>}
+      <Handle type="source" id="out" position={Position.Right} style={{ opacity: 0 }} />
     </div>
   );
 }
