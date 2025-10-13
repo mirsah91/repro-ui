@@ -268,7 +268,7 @@ export default function SessionReplay({ sessionId }) {
     const rawTicks = useTimeline(sessionId); // backend events (server time)
 
     const [currentTime, setCurrentTime] = useState(0); // rrweb virtual ms
-    const [playerStatus, setPlayerStatus] = useState("idle"); // idle | loading | ready | no-rrweb | error
+    const [playerStatus, setPlayerStatus] = useState("idle"); // idle | loading | ready | playing | paused | complete | no-rrweb | error
     const [showAll, setShowAll] = useState(false);
     const [expandedGroups, setExpandedGroups] = useState({});
     const [hoveredMarker, setHoveredMarker] = useState(null);
@@ -418,20 +418,27 @@ export default function SessionReplay({ sessionId }) {
         if (status !== "ready" || !containerRef.current || replayerRef.current) return;
 
         let cancelled = false;
+        let intervalId = null;
+        let feedCancelled = false;
+        let removeFinishListener = null;
+
+        setPlayerStatus("loading");
+
         (async () => {
             try {
-                setPlayerStatus("loading");
-
                 // ensure we have at least 2 events for rrweb init
                 while (queueRef.current.length < 2 && !doneRef.current) {
                     await pullMore(10);
                 }
                 const initial = queueRef.current.splice(0, queueRef.current.length);
-                if (!initial.length) return;
+                if (!initial.length) {
+                    setPlayerStatus("no-rrweb");
+                    return;
+                }
 
                 rrwebZeroTsRef.current = initial[0]?.timestamp || null;
 
-                if (!initial.length || initial.length < 2) {
+                if (initial.length < 2) {
                     setPlayerStatus("no-rrweb");
                     return;
                 }
@@ -457,10 +464,30 @@ export default function SessionReplay({ sessionId }) {
                     mouseTail: false,
                 });
                 replayerRef.current = rep;
+
+                const finishHandler = () => {
+                    if (cancelled) return;
+                    const metaData = rep.getMetaData?.();
+                    const total = metaData?.totalTime ?? 0;
+                    setCurrentTime(total);
+                    lastPausedTimeRef.current = 0;
+                    setPlayerStatus("complete");
+                };
+
+                if (typeof rep.on === "function") {
+                    const maybeUnsub = rep.on("finish", finishHandler);
+                    if (typeof maybeUnsub === "function") {
+                        removeFinishListener = maybeUnsub;
+                    } else if (typeof rep.off === "function") {
+                        removeFinishListener = () => rep.off("finish", finishHandler);
+                    }
+                }
+
                 rep.play();
 
                 // keep current time in sync
-                const interval = window.setInterval(() => {
+                intervalId = window.setInterval(() => {
+                    if (cancelled) return;
                     try {
                         const t = replayerRef.current?.getCurrentTime?.() ?? 0;
                         setCurrentTime(t);
@@ -469,7 +496,7 @@ export default function SessionReplay({ sessionId }) {
 
                 // background feed: add events one-by-one (safer)
                 (async function feed() {
-                    while (!cancelled && replayerRef.current && !doneRef.current) {
+                    while (!cancelled && !feedCancelled && replayerRef.current && !doneRef.current) {
                         if (queueRef.current.length < 50) {
                             await pullMore(10);
                         }
@@ -477,12 +504,11 @@ export default function SessionReplay({ sessionId }) {
                         for (const ev of batch) {
                             try { replayerRef.current.addEvent(ev); } catch {}
                         }
-                        await new Promise(r => setTimeout(r, 100));
+                        await new Promise((r) => setTimeout(r, 100));
                     }
                 })();
 
                 setPlayerStatus("playing");
-                return () => window.clearInterval(interval);
             } catch (e) {
                 console.error("replay bootstrap error", e);
                 setPlayerStatus("error");
@@ -491,6 +517,13 @@ export default function SessionReplay({ sessionId }) {
 
         return () => {
             cancelled = true;
+            feedCancelled = true;
+            if (intervalId) {
+                window.clearInterval(intervalId);
+            }
+            if (typeof removeFinishListener === "function") {
+                try { removeFinishListener(); } catch {}
+            }
             try { replayerRef.current?.pause(); } catch {}
             replayerRef.current = null;
         };
@@ -516,17 +549,20 @@ export default function SessionReplay({ sessionId }) {
     const progress = totalTime > 0 ? Math.min(100, (currentTime / totalTime) * 100) : 0;
     const isPlaying = playerStatus === "playing";
     const canPause = isPlaying;
-    const canPlay = ["ready", "paused", "idle"].includes(playerStatus);
+    const canPlay = ["ready", "paused", "idle", "complete"].includes(playerStatus);
     const PrimaryIcon = isPlaying ? IconPause : IconPlay;
     const primaryLabel = isPlaying ? "Pause" : "Play";
     const currentSeconds = currentTime / 1000;
     const totalSeconds = totalTime / 1000;
     const highlightLabel = absNow != null ? formatRelativeTime(absNow) : null;
+    const hasHiddenEvents = !showAll && baseItems.length < ticks.length;
     const highlightCopy = showAll
         ? "Showing the complete sequence of backend signals captured during the replay."
         : highlightLabel && highlightLabel !== "—"
             ? `Highlighting events near ${highlightLabel} from the active replay position.`
-            : "Highlighting events around the active replay position.";
+            : hasHiddenEvents
+                ? "Showing a focused slice around the active replay position."
+                : "Highlighting events around the active replay position.";
 
     const eventMarkers = useMemo(() => {
         if (!totalTime || !Number.isFinite(totalTime)) return [];
@@ -577,6 +613,40 @@ export default function SessionReplay({ sessionId }) {
         hoveredMarker?.aligned != null && Number.isFinite(hoveredMarker?.aligned)
             ? `~${Math.round(hoveredMarker.aligned)}ms replay`
             : null;
+
+    const tooltipAnchor = useMemo(() => {
+        if (!hoveredMarker) return null;
+        const percent = Number(hoveredMarker.percent);
+        if (!Number.isFinite(percent)) return null;
+        if (percent < 12) {
+            return { left: Math.max(percent, 4), translate: "-10%" };
+        }
+        if (percent > 88) {
+            return { left: Math.min(percent, 96), translate: "-90%" };
+        }
+        return { left: percent, translate: "-50%" };
+    }, [hoveredMarker]);
+
+    const statusChip = useMemo(() => {
+        switch (playerStatus) {
+            case "playing":
+                return { label: "Playing", tone: "bg-emerald-400", text: "text-emerald-200", pulse: true };
+            case "paused":
+                return { label: "Paused", tone: "bg-amber-300", text: "text-amber-200", pulse: false };
+            case "complete":
+                return { label: "Complete", tone: "bg-sky-400", text: "text-sky-200", pulse: false };
+            case "loading":
+                return { label: "Loading", tone: "bg-blue-400", text: "text-blue-200", pulse: true };
+            case "no-rrweb":
+                return { label: "No replay", tone: "bg-slate-500", text: "text-slate-300", pulse: false };
+            case "error":
+                return { label: "Error", tone: "bg-rose-400", text: "text-rose-200", pulse: false };
+            case "ready":
+                return { label: "Ready", tone: "bg-sky-400", text: "text-sky-200", pulse: false };
+            default:
+                return { label: "Idle", tone: "bg-slate-500", text: "text-slate-300", pulse: false };
+        }
+    }, [playerStatus]);
 
     const playFromVirtualTime = useCallback((virtualMs) => {
         const rep = replayerRef.current;
@@ -647,17 +717,18 @@ export default function SessionReplay({ sessionId }) {
     }
 
     return (
-        <PanelGroup direction="horizontal" className="h-screen bg-slate-950 text-slate-100">
+        <div className="flex h-full min-h-0 flex-1 bg-slate-950 text-slate-100">
+            <PanelGroup direction="horizontal" className="flex h-full w-full">
             <Panel
                 defaultSize={62}
                 minSize={40}
-                className="flex flex-col border-r border-white/10 bg-[radial-gradient(circle_at_top,_rgba(66,97,255,0.08),_transparent_55%)]"
+                className="flex min-h-0 flex-col border-r border-white/10 bg-[radial-gradient(circle_at_top,_rgba(66,97,255,0.08),_transparent_55%)]"
             >
                 <div className="relative flex-1 overflow-hidden">
                     <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(15,23,42,0.65),_transparent_75%)]" aria-hidden />
-                    <div ref={containerRef} className="relative z-10 h-full w-full" />
+                    <div ref={containerRef} className="relative z-10 h-full w-full overflow-hidden rounded-br-[44px]" />
                 </div>
-                <div className="border-t border-white/10 px-6 py-5 backdrop-blur-sm bg-slate-950/60">
+                <div className="border-t border-white/10 bg-slate-950/70 px-6 pb-6 pt-5 backdrop-blur">
                     <div className="flex flex-wrap items-center gap-3">
                         <button
                             onClick={() => {
@@ -698,13 +769,16 @@ export default function SessionReplay({ sessionId }) {
                             <IconRestart className="h-4 w-4" />
                             Restart
                         </button>
-                        <div className="ml-auto flex items-center gap-2 text-xs uppercase tracking-wide text-white/60">
-                            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" aria-hidden />
-                            {playerStatus}
+                        <div className="ml-auto flex items-center gap-2 text-xs uppercase tracking-wide">
+                            <span
+                                className={`h-2 w-2 rounded-full ${statusChip.tone} ${statusChip.pulse ? "animate-pulse" : ""}`}
+                                aria-hidden
+                            />
+                            <span className={`font-semibold ${statusChip.text}`}>{statusChip.label}</span>
                         </div>
                     </div>
 
-                    <div className="mt-5 space-y-4">
+                    <div className="mt-4 space-y-4">
                         <div
                             ref={trackRef}
                             role="presentation"
@@ -759,10 +833,13 @@ export default function SessionReplay({ sessionId }) {
                                 );
                             })}
 
-                            {hoveredMarker && hoveredPresentation && (
+                            {hoveredMarker && hoveredPresentation && tooltipAnchor && (
                                 <div
-                                    className="pointer-events-none absolute -top-28 z-20 w-64 -translate-x-1/2 rounded-2xl border border-white/10 bg-slate-950/90 p-4 shadow-[0_18px_44px_-24px_rgba(15,23,42,0.95)] backdrop-blur"
-                                    style={{ left: `${hoveredMarker.percent}%` }}
+                                    className="pointer-events-none absolute -top-28 z-20 w-64 rounded-2xl border border-white/10 bg-slate-950/90 p-4 shadow-[0_18px_44px_-24px_rgba(15,23,42,0.95)] backdrop-blur"
+                                    style={{
+                                        left: `${tooltipAnchor.left}%`,
+                                        transform: `translateX(${tooltipAnchor.translate})`,
+                                    }}
                                 >
                                     <div className="flex items-start gap-3">
                                         <span
@@ -822,25 +899,28 @@ export default function SessionReplay({ sessionId }) {
             <Panel
                 defaultSize={38}
                 minSize={25}
-                className="flex overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(148,163,255,0.08),_transparent_55%)]"
+                className="flex min-h-0 overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(148,163,255,0.08),_transparent_55%)]"
             >
                 <aside className="flex h-full flex-1 flex-col">
                     <div className="flex-1 overflow-y-auto px-6 py-6">
-                        <header className="flex flex-wrap items-start justify-between gap-4">
+                        <header className="sticky top-0 z-20 flex flex-wrap items-start justify-between gap-4 rounded-3xl border border-white/10 bg-slate-950/80 px-5 py-4 backdrop-blur">
                             <div>
                                 <div className="text-xs uppercase tracking-[0.2em] text-white/50">Session intelligence</div>
                                 <h2 className="mt-1 text-2xl font-semibold text-white">Timeline of signals</h2>
                                 <p className="mt-1 text-sm text-white/60">{highlightCopy}</p>
                             </div>
-                            <label className="flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/70 transition hover:border-white/30 hover:bg-white/10">
-                                <input
-                                    type="checkbox"
-                                    className="accent-sky-400"
-                                    checked={showAll}
-                                    onChange={(e) => setShowAll(e.target.checked)}
-                                />
-                                Show all events
-                            </label>
+                            <button
+                                type="button"
+                                onClick={() => setShowAll((prev) => !prev)}
+                                className={`relative inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
+                                    showAll
+                                        ? "border-sky-400/60 bg-sky-500/10 text-sky-200 shadow-[0_12px_30px_-18px_rgba(56,189,248,0.65)]"
+                                        : "border-white/10 bg-white/5 text-white/70 hover:border-white/30 hover:bg-white/10"
+                                }`}
+                            >
+                                <span className={`inline-flex h-2.5 w-2.5 rounded-full ${showAll ? "bg-sky-300" : "bg-white/40"}`} aria-hidden />
+                                {showAll ? "Showing all events" : "Show all events"}
+                            </button>
                         </header>
 
                         <div className="mt-6 space-y-4">
@@ -1006,10 +1086,21 @@ export default function SessionReplay({ sessionId }) {
                                     .
                                 </div>
                             )}
+
+                            {hasHiddenEvents && (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAll(true)}
+                                    className="flex w-full items-center justify-center rounded-2xl border border-sky-400/50 bg-sky-500/10 px-4 py-3 text-sm font-semibold text-sky-200 shadow-[0_18px_40px_-30px_rgba(56,189,248,0.8)] transition hover:border-sky-300 hover:bg-sky-500/20"
+                                >
+                                    Show all {ticks.length} events
+                                </button>
+                            )}
                         </div>
                     </div>
                 </aside>
             </Panel>
-        </PanelGroup>
+            </PanelGroup>
+        </div>
     );
 }
