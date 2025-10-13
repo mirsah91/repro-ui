@@ -12,6 +12,96 @@ const POLL_MS = 200;
 // rank order inside one action group
 const KIND_RANK = { action: 0, request: 1, db: 2, email: 3 };
 
+const iconStroke = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.7,
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+};
+
+function IconPlay(props) {
+    return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" {...iconStroke} {...props}>
+            <polygon points="7 4 20 12 7 20 7 4" fill="currentColor" stroke="none" />
+        </svg>
+    );
+}
+
+function IconPause(props) {
+    return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" {...iconStroke} {...props}>
+            <line x1="9" y1="4" x2="9" y2="20" />
+            <line x1="15" y1="4" x2="15" y2="20" />
+        </svg>
+    );
+}
+
+function IconRestart(props) {
+    return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" {...iconStroke} {...props}>
+            <polyline points="3 2 3 8 9 8" />
+            <path d="M3.46 10A9 9 0 1 0 6 5.3" />
+        </svg>
+    );
+}
+
+function IconChevronDown(props) {
+    return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" {...iconStroke} {...props}>
+            <polyline points="6 9 12 15 18 9" />
+        </svg>
+    );
+}
+
+function IconClock(props) {
+    return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" {...iconStroke} {...props}>
+            <circle cx="12" cy="12" r="9" />
+            <polyline points="12 7 12 12 15 15" />
+        </svg>
+    );
+}
+
+function IconSparkles(props) {
+    return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" {...iconStroke} {...props}>
+            <path d="M12 3.5 13.8 8.2 18.5 10 13.8 11.8 12 16.5 10.2 11.8 5.5 10 10.2 8.2 12 3.5z" stroke="none" fill="currentColor" />
+            <path d="M5 4l.5 1.5L7 6l-1.5.5L5 8l-.5-1.5L3 6l1.5-.5z" stroke="none" fill="currentColor" opacity="0.7" />
+            <path d="M18.5 15l.4 1.2 1.1.4-1.1.4-.4 1.2-.4-1.2-1.1-.4 1.1-.4z" stroke="none" fill="currentColor" opacity="0.7" />
+        </svg>
+    );
+}
+
+function IconGlobe(props) {
+    return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" {...iconStroke} {...props}>
+            <circle cx="12" cy="12" r="9" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <path d="M12 3c2.5 2.7 3.8 6 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-6-3.8-9s1.3-6.3 3.8-9z" />
+        </svg>
+    );
+}
+
+function IconDatabase(props) {
+    return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" {...iconStroke} {...props}>
+            <ellipse cx="12" cy="5" rx="8" ry="3" />
+            <path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
+            <path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
+        </svg>
+    );
+}
+
+function IconMail(props) {
+    return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" {...iconStroke} {...props}>
+            <rect x="3" y="5" width="18" height="14" rx="2" />
+            <polyline points="3 7.5 12 13 21 7.5" />
+        </svg>
+    );
+}
+
 // pick a point time (server epoch ms) from any item
 function itemServerTime(it) {
     if (typeof it.t === "number") return it.t;
@@ -172,6 +262,7 @@ export default function SessionReplay({ sessionId }) {
     const [currentTime, setCurrentTime] = useState(0); // rrweb virtual ms
     const [playerStatus, setPlayerStatus] = useState("idle"); // idle | loading | ready | no-rrweb | error
     const [showAll, setShowAll] = useState(false);
+    const [expandedGroups, setExpandedGroups] = useState({});
 
     // time alignment
     const rrwebFirstTsRef = useRef(null);   // first rrweb event.timestamp
@@ -236,6 +327,80 @@ export default function SessionReplay({ sessionId }) {
     const renderGroups = React.useMemo(() => {
         return groupByAction(baseItems);
     }, [baseItems]);
+
+    const timelineAnchor = useMemo(() => {
+        if (!ticks.length) return null;
+        const first = ticks[0];
+        if (typeof first?._startServer === "number") return first._startServer;
+        if (typeof first?._t === "number") return first._t;
+        return null;
+    }, [ticks]);
+
+    function formatRelativeTime(ms) {
+        if (typeof ms !== "number" || timelineAnchor == null) return "—";
+        const delta = ms - timelineAnchor;
+        if (!Number.isFinite(delta)) return "—";
+        const sign = delta >= 0 ? "+" : "-";
+        const abs = Math.abs(delta);
+        if (abs < 1000) return `${sign}${Math.round(abs)}ms`;
+        if (abs < 60_000) {
+            const seconds = abs / 1000;
+            return `${sign}${seconds.toFixed(seconds >= 10 ? 0 : 2)}s`;
+        }
+        const minutes = abs / 60_000;
+        return `${sign}${minutes.toFixed(minutes >= 10 ? 0 : 1)}m`;
+    }
+
+    function formatActionWindow(action) {
+        if (!action) return null;
+        const start = typeof action.tStart === "number" ? formatRelativeTime(action.tStart) : null;
+        const end = typeof action.tEnd === "number" ? formatRelativeTime(action.tEnd) : null;
+        if (!start && !end) return null;
+        if (start && end) return `${start} → ${end}`;
+        return start ?? end;
+    }
+
+    function statusTone(status) {
+        if (typeof status !== "number") return "text-slate-300";
+        if (status >= 500) return "text-rose-300";
+        if (status >= 400) return "text-amber-300";
+        return "text-emerald-300";
+    }
+
+    function getKindPresentation(kind) {
+        switch (kind) {
+            case "action":
+                return {
+                    label: "User action",
+                    Icon: IconSparkles,
+                    accent: "border-sky-400/40 bg-sky-500/10 text-sky-200",
+                };
+            case "request":
+                return {
+                    label: "Network request",
+                    Icon: IconGlobe,
+                    accent: "border-emerald-400/40 bg-emerald-500/10 text-emerald-200",
+                };
+            case "db":
+                return {
+                    label: "Database",
+                    Icon: IconDatabase,
+                    accent: "border-amber-400/40 bg-amber-500/10 text-amber-200",
+                };
+            case "email":
+                return {
+                    label: "Email",
+                    Icon: IconMail,
+                    accent: "border-pink-400/40 bg-pink-500/10 text-pink-200",
+                };
+            default:
+                return {
+                    label: kind,
+                    Icon: IconClock,
+                    accent: "border-slate-400/40 bg-slate-500/10 text-slate-200",
+                };
+        }
+    }
 
     // bootstrap player once rrweb meta is ready
     useEffect(() => {
@@ -305,7 +470,7 @@ export default function SessionReplay({ sessionId }) {
                     }
                 })();
 
-                setPlayerStatus("ready");
+                setPlayerStatus("playing");
                 return () => window.clearInterval(interval);
             } catch (e) {
                 console.error("replay bootstrap error", e);
@@ -326,8 +491,22 @@ export default function SessionReplay({ sessionId }) {
         clockOffsetRef.current = ticks[0]._t - rrwebFirstTsRef.current;
     }, [ticks]);
 
-    const canPause = playerStatus === "playing" || playerStatus === 'ready'
-    const canPlay = playerStatus !== "playing" && playerStatus !== 'ready'
+    const meta = replayerRef.current?.getMetaData?.();
+    const totalTime = meta?.totalTime ?? 0;
+    const progress = totalTime > 0 ? Math.min(100, (currentTime / totalTime) * 100) : 0;
+    const isPlaying = playerStatus === "playing";
+    const canPause = isPlaying;
+    const canPlay = ["ready", "paused", "idle"].includes(playerStatus);
+    const PrimaryIcon = isPlaying ? IconPause : IconPlay;
+    const primaryLabel = isPlaying ? "Pause" : "Play";
+    const currentSeconds = currentTime / 1000;
+    const totalSeconds = totalTime / 1000;
+    const highlightLabel = absNow != null ? formatRelativeTime(absNow) : null;
+    const highlightCopy = showAll
+        ? "Showing the complete sequence of backend signals captured during the replay."
+        : highlightLabel && highlightLabel !== "—"
+            ? `Highlighting events near ${highlightLabel} from the active replay position.`
+            : "Highlighting events around the active replay position.";
 
     function alignedSeekMsFor(ev) {
         // prefer start → end → point
@@ -373,191 +552,280 @@ export default function SessionReplay({ sessionId }) {
     }
 
     return (
-        <div className="flex h-screen">
+        <div className="flex h-screen bg-slate-950 text-slate-100">
             {/* left: rrweb player */}
-            <div className="flex-1 flex flex-col">
-                <div ref={containerRef} className="flex-1 bg-gray-50 border-b"/>
-                {/* Play / Pause */}
-                <button
-                    onClick={() => {
-                        const rep = replayerRef.current;
-                        if (!rep) return;
+            <div className="flex-1 flex flex-col border-r border-white/10 bg-[radial-gradient(circle_at_top,_rgba(66,97,255,0.08),_transparent_55%)]">
+                <div className="relative flex-1 overflow-hidden">
+                    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(15,23,42,0.65),_transparent_75%)]" aria-hidden />
+                    <div ref={containerRef} className="relative z-10 h-full w-full" />
+                </div>
+                <div className="border-t border-white/10 px-6 py-5 backdrop-blur-sm bg-slate-950/60">
+                    <div className="flex flex-wrap items-center gap-3">
+                        <button
+                            onClick={() => {
+                                const rep = replayerRef.current;
+                                if (!rep) return;
 
-                        if (canPlay) {
-                            // resume from last known paused time (or currentTime as fallback)
-                            const resumeAt =
-                                Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
-                                    ? lastPausedTimeRef.current
-                                    : (rep.getCurrentTime?.() ?? currentTime ?? 0);
+                                if (canPause) {
+                                    const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
+                                    lastPausedTimeRef.current = now;
+                                    rep.pause();
+                                    setPlayerStatus("paused");
+                                } else if (canPlay) {
+                                    const resumeAt =
+                                        Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
+                                            ? lastPausedTimeRef.current
+                                            : (rep.getCurrentTime?.() ?? currentTime ?? 0);
+                                    rep.play(resumeAt);
+                                    setPlayerStatus("playing");
+                                }
+                            }}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-4 py-2 text-sm font-medium shadow-[0_12px_28px_-16px_rgba(15,23,42,0.9)] transition hover:border-white/40 hover:bg-white/10"
+                        >
+                            <PrimaryIcon className="h-4 w-4" />
+                            {primaryLabel}
+                        </button>
+                        <button
+                            onClick={() => {
+                                const rep = replayerRef.current;
+                                if (!rep) return;
+                                rep.pause();
+                                lastPausedTimeRef.current = 0;
+                                rep.play(0);
+                                setPlayerStatus("playing");
+                                setCurrentTime(0);
+                            }}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm text-slate-200 transition hover:border-white/30 hover:bg-white/10"
+                        >
+                            <IconRestart className="h-4 w-4" />
+                            Restart
+                        </button>
+                        <div className="ml-auto flex items-center gap-2 text-xs uppercase tracking-wide text-white/60">
+                            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" aria-hidden />
+                            {playerStatus}
+                        </div>
+                    </div>
 
-                            rep.play(resumeAt);
-                            setPlayerStatus("playing");
-                        } else {
-                            // capture current position before pausing
-                            const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
-                            lastPausedTimeRef.current = now;
-                            rep.pause();
-                            setPlayerStatus("paused");
-                        }
-                    }}
-                    className="px-3 py-1 border rounded bg-gray-100 text-sm text-black"
-                >
-                    {canPause ? "Pause" : "Play"}
-                </button>
-                {/* Restart */}
-                <button
-                    onClick={() => {
-                        const rep = replayerRef.current;
-                        if (!rep) return;
-                        rep.pause();
-                        lastPausedTimeRef.current = 0; // keep our ref in sync
-                        rep.play(0);                    // explicit restart
-                        setPlayerStatus("playing");
-                    }}
-                    className="px-3 py-1 border rounded bg-gray-100 text-sm text-black"
-                >
-                    Restart
-                </button>
-                {/* Seek bar */}
-                <input
-                    type="range"
-                    min={0}
-                    max={replayerRef.current?.getMetaData().totalTime ?? 0}
-                    value={currentTime}
-                    onChange={(e) => {
-                        const rep = replayerRef.current;
-                        const newTime = Number(e.target.value);
-                        if (!rep) return;
+                    <div className="mt-5 space-y-3">
+                        <input
+                            type="range"
+                            min={0}
+                            max={Math.max(totalTime, 0)}
+                            value={currentTime}
+                            onChange={(e) => {
+                                const rep = replayerRef.current;
+                                const newTime = Number(e.target.value);
+                                if (!rep) return;
 
-                        rep.pause();
-                        lastPausedTimeRef.current = newTime; // sync pause position
-                        rep.play(newTime);                   // seek + play
-                        setPlayerStatus("playing");
-                        setCurrentTime(newTime);
-                    }}
-                    className="flex-1"
-                />
-                <div className="p-2 border-t text-sm text-gray-600">
-                    time: {Math.round(currentTime)} ms
-                    <span className="ml-4">status: {playerStatus}</span>
+                                rep.pause();
+                                lastPausedTimeRef.current = newTime;
+                                rep.play(newTime);
+                                setPlayerStatus("playing");
+                                setCurrentTime(newTime);
+                            }}
+                            className="w-full accent-sky-400"
+                        />
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                            <div
+                                className="h-full rounded-full bg-gradient-to-r from-sky-400 via-blue-500 to-indigo-500"
+                                style={{ width: `${progress}%` }}
+                            />
+                        </div>
+                        <div className="flex items-center justify-between text-xs text-white/60">
+                            <span>0s</span>
+                            <span className="font-medium text-white/80">{currentSeconds.toFixed(currentSeconds >= 10 ? 0 : 1)}s</span>
+                            <span>{totalSeconds > 0 ? totalSeconds.toFixed(totalSeconds >= 10 ? 0 : 1) : "0"}s</span>
+                        </div>
+                    </div>
                 </div>
             </div>
 
             {/* right: backend sidebar */}
-            <div className="w-[28rem] min-w-[22rem] max-w-[32rem] border-l p-3 overflow-auto">
-                <div className="flex items-center justify-between mb-2">
-                    <div className="font-semibold">
-                        backend events {showAll ? "(all)" : `near ${Math.round(currentTime)}ms`}
-                    </div>
-                    <label className="text-xs flex items-center gap-2">
-                    <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)}/>
-                        show all
-                    </label>
-                </div>
+            <aside className="w-[30rem] max-w-[34rem] overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(148,163,255,0.08),_transparent_55%)]">
+                <div className="flex h-full flex-col gap-6 px-6 py-6">
+                    <header className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                            <div className="text-xs uppercase tracking-[0.2em] text-white/50">Session intelligence</div>
+                            <h2 className="mt-1 text-2xl font-semibold text-white">Timeline of signals</h2>
+                            <p className="mt-1 text-sm text-white/60">{highlightCopy}</p>
+                        </div>
+                        <label className="flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/70 transition hover:border-white/30 hover:bg-white/10">
+                            <input
+                                type="checkbox"
+                                className="accent-sky-400"
+                                checked={showAll}
+                                onChange={(e) => setShowAll(e.target.checked)}
+                            />
+                            Show all events
+                        </label>
+                    </header>
 
-                {playerStatus === "no-rrweb" && (
-                    <div className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded p-2 mb-3">
-                        no rrweb events (or too few to initialize) for this session.
-                    </div>
-                )}
+                    {playerStatus === "no-rrweb" && (
+                        <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+                            No rrweb events (or too few to initialize) were captured for this session.
+                        </div>
+                    )}
 
-                {!ticks.length && (
-                    <div className="text-xs text-gray-500 mb-2">
-                        no backend timeline data for this session.
-                    </div>
-                )}
+                    {!ticks.length && (
+                        <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-white/70">
+                            No backend timeline data has been recorded for this session yet.
+                        </div>
+                    )}
 
-                <ul className="space-y-2">
-                    <ul className="space-y-3">
-                        {renderGroups.map((g, gi) => (
-                            <li key={g.id || gi} className="rounded border p-2">
-                                {/* Group header: show the Action label if present, else a generic tag */}
-                                {(() => {
-                                    const action = g.items.find(it => it.kind === "action");
-                                    const title = action?.label || action?.actionId || "Other events";
-                                    const win = action
-                                        ? `[${action.tStart ?? "—"} … ${action.tEnd ?? "—"}]`
-                                        : "";
-                                    return (
-                                        <div className="mb-2">
-                                            <div className="text-xs font-semibold text-gray-700">
-                                                {title} {win && <span className="ml-2 text-gray-500">{win}</span>}
-                                            </div>
-                                        </div>
-                                    );
-                                })()}
+                    <div className="space-y-4">
+                        {renderGroups.map((g, gi) => {
+                            const action = g.items.find((it) => it.kind === "action");
+                            const title = action?.label || action?.actionId || "Other events";
+                            const windowLabel = formatActionWindow(action);
+                            const isExpanded = expandedGroups[gi] ?? true;
 
-                                {/* Group items in rank order (already sorted by groupByAction) */}
-                                <div className="space-y-2">
-                                    {g.items.map((e, i) => {
-                                        const aligned = toRrwebTime(e._t);
-                                        return (
-                                            <div
-                                                key={i}
-                                                role="button"
-                                                tabIndex={0}
-                                                onClick={() => jumpToEvent(e)}
-                                                onKeyDown={(k) => (k.key === "Enter" || k.key === " ") && jumpToEvent(e)}
-                                                className="rounded border p-2 cursor-pointer hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
-                                            >
-                                                <div className="text-xs text-gray-500">
-                                                    {e.kind} @ {e._t} (aligned
-                                                    ~ {typeof aligned === "number" ? Math.round(aligned) : "—"}ms)
+                            return (
+                                <div
+                                    key={g.id || gi}
+                                    className="rounded-3xl border border-white/10 bg-white/[0.05] p-5 shadow-[0_20px_55px_-28px_rgba(15,23,42,0.9)] backdrop-blur transition hover:border-white/20"
+                                >
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            setExpandedGroups((prev) => ({
+                                                ...prev,
+                                                [gi]: !(prev[gi] ?? true),
+                                            }))
+                                        }
+                                        className="flex w-full items-center justify-between gap-4 text-left"
+                                    >
+                                        <div>
+                                            <div className="text-xs uppercase tracking-[0.24em] text-white/50">Action group</div>
+                                            <div className="mt-1 text-lg font-semibold text-white">{title}</div>
+                                            {windowLabel && (
+                                                <div className="mt-1 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] text-white/60">
+                                                    <IconClock className="h-3.5 w-3.5" />
+                                                    {windowLabel}
                                                 </div>
+                                            )}
+                                        </div>
+                                        <span
+                                            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/70 transition-transform duration-200"
+                                            style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)" }}
+                                        >
+                                            <IconChevronDown className="h-4 w-4" />
+                                        </span>
+                                    </button>
 
-                                                {e.kind === "request" && (
-                                                    <div className="text-sm">
-                                                        <div className="font-mono break-all">
-                                                            {e.meta?.method} {e.meta?.url}
-                                                        </div>
-                                                        <div className="text-gray-600">
-                                                            status {e.meta?.status} • {e.meta?.durMs}ms
-                                                        </div>
-                                                    </div>
-                                                )}
-                                                {e.kind === "db" && (
-                                                    <div className="text-sm">
-                                                        <div
-                                                            className="font-mono">{e.meta?.collection} • {e.meta?.op}</div>
-                                                        {e.meta?.query && (
-                                                            <pre
-                                                                className="text-[11px] bg-black-50 rounded p-1 overflow-auto">
-                                                                {JSON.stringify(e.meta.query, null, 2)}
-                                                            </pre>
-                                                        )}
-                                                        {e.meta?.resultMeta && (
-                                                            <div className="text-gray-600 text-xs">
-                                                                result {JSON.stringify(e.meta.resultMeta)}
+                                    <div
+                                        className={`overflow-hidden transition-all duration-300 ease-out ${
+                                            isExpanded
+                                                ? "pointer-events-auto mt-4 max-h-[1200px] opacity-100"
+                                                : "pointer-events-none max-h-0 opacity-0"
+                                        }`}
+                                    >
+                                        <div className="space-y-3 py-1">
+                                            {g.items.map((e, i) => {
+                                                const aligned = toRrwebTime(e._t);
+                                                const { label, Icon, accent } = getKindPresentation(e.kind);
+                                                const relative = formatRelativeTime(e._t ?? e._startServer ?? e._endServer);
+
+                                                return (
+                                                    <button
+                                                        key={i}
+                                                        type="button"
+                                                        onClick={() => jumpToEvent(e)}
+                                                        className="group flex w-full items-start gap-4 rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-4 text-left shadow-[0_18px_40px_-24px_rgba(15,23,42,0.95)] transition duration-200 hover:-translate-y-0.5 hover:border-white/30 hover:bg-slate-900/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60"
+                                                    >
+                                                        <span className={`mt-1 flex h-10 w-10 items-center justify-center rounded-full border ${accent}`}>
+                                                            <Icon className="h-4 w-4" />
+                                                        </span>
+                                                        <div className="flex-1 space-y-2">
+                                                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs uppercase tracking-[0.18em] text-white/50">
+                                                                <span>{label}</span>
+                                                                {relative !== "—" && (
+                                                                    <span className="flex items-center gap-2 text-[11px] normal-case text-white/60">
+                                                                        <span className="h-1.5 w-1.5 rounded-full bg-white/30" />
+                                                                        {relative}
+                                                                    </span>
+                                                                )}
+                                                                {typeof aligned === "number" && (
+                                                                    <span className="text-[11px] normal-case text-white/40">
+                                                                        ~{Math.round(aligned)}ms rrweb
+                                                                    </span>
+                                                                )}
                                                             </div>
-                                                        )}
-                                                    </div>
-                                                )}
-                                                {e.kind === "action" && (
-                                                    <div className="text-sm">
-                                                        <div className="font-mono break-all">{e.label || e.actionId}</div>
-                                                        {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
-                                                            <div className="text-gray-600 text-xs">
-                                                                [{e.tStart ?? "—"} … {e.tEnd ?? "—"}]
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )}
-                                                {e.kind === "email" && <EmailItem meta={e.meta} />}
-                                            </div>
-                                        );
-                                    })}
+
+                                                            {e.kind === "request" && (
+                                                                <div className="space-y-1 text-sm text-white/80">
+                                                                    <div className="font-mono text-[12px] uppercase tracking-wider text-emerald-200">
+                                                                        {e.meta?.method}
+                                                                        <span className="ml-2 text-white/60">{e.meta?.url}</span>
+                                                                    </div>
+                                                                    <div className="flex flex-wrap items-center gap-3 text-[12px] text-white/60">
+                                                                        <span className={statusTone(e.meta?.status)}>Status {e.meta?.status ?? "—"}</span>
+                                                                        {typeof e.meta?.durMs === "number" && (
+                                                                            <span>Duration {e.meta.durMs}ms</span>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            )}
+
+                                                            {e.kind === "db" && (
+                                                                <div className="space-y-2 text-sm text-white/80">
+                                                                    <div className="font-mono text-xs uppercase tracking-wider text-amber-200">
+                                                                        {e.meta?.collection} • {e.meta?.op}
+                                                                    </div>
+                                                                    {e.meta?.query && (
+                                                                        <pre className="max-h-40 overflow-auto rounded-xl border border-white/5 bg-slate-900/80 p-3 text-[11px] leading-relaxed text-white/70">
+                                                                            {JSON.stringify(e.meta.query, null, 2)}
+                                                                        </pre>
+                                                                    )}
+                                                                    {e.meta?.resultMeta && (
+                                                                        <div className="text-xs text-white/50">
+                                                                            Result {JSON.stringify(e.meta.resultMeta)}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )}
+
+                                                            {e.kind === "action" && (
+                                                                <div className="space-y-1 text-sm text-white/80">
+                                                                    <div className="font-semibold text-white/90">{e.label || e.actionId}</div>
+                                                                    {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
+                                                                        <div className="text-xs text-white/50">[{formatRelativeTime(e.tStart)} → {formatRelativeTime(e.tEnd)}]</div>
+                                                                    )}
+                                                                </div>
+                                                            )}
+
+                                                            {e.kind === "email" && (
+                                                                <div className="text-sm text-white/80">
+                                                                    <EmailItem meta={e.meta} />
+                                                                </div>
+                                                            )}
+
+                                                            {!["request", "db", "action", "email"].includes(e.kind) && (
+                                                                <div className="text-sm text-white/80">
+                                                                    <pre className="text-[11px] text-white/60">{JSON.stringify(e, null, 2)}</pre>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
                                 </div>
-                            </li>
-                        ))}
+                            );
+                        })}
+
                         {!renderGroups.length && !showAll && (
-                            <li className="text-xs text-gray-500">
-                                no events near the current time. Try{" "}
-                                <button className="underline" onClick={() => setShowAll(true)}>show all</button>.
-                            </li>
+                            <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-5 text-sm text-white/70">
+                                No events near the current replay moment. You can
+                                <button className="ml-1 underline" onClick={() => setShowAll(true)}>
+                                    show the entire stream
+                                </button>
+                                .
+                            </div>
                         )}
-                    </ul>
-                </ul>
-            </div>
+                    </div>
+                </div>
+            </aside>
         </div>
     );
 }
