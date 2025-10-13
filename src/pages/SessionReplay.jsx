@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Replayer } from "rrweb";
 import "rrweb/dist/rrweb.min.css";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import useTimeline from "../hooks/useTimeline";
 import { decodeBase64JsonArray } from "../lib/rrwebDecode";
 import EmailItem from "../components/EmailItem.jsx";
@@ -270,7 +269,6 @@ export default function SessionReplay({ sessionId }) {
     const [currentTime, setCurrentTime] = useState(0); // rrweb virtual ms
     const [playerStatus, setPlayerStatus] = useState("idle"); // idle | loading | ready | playing | paused | complete | no-rrweb | error
     const [showAll, setShowAll] = useState(false);
-    const [expandedGroups, setExpandedGroups] = useState({});
     const [hoveredMarker, setHoveredMarker] = useState(null);
 
     const trackRef = useRef(null);
@@ -717,390 +715,350 @@ export default function SessionReplay({ sessionId }) {
     }
 
     return (
-        <div className="flex h-full min-h-0 flex-1 flex-col px-10 pb-10 pt-8 text-slate-100">
-            <PanelGroup direction="horizontal" className="flex h-full min-h-0 min-w-0 w-full gap-8">
-                <Panel
-                    defaultSize={62}
-                    minSize={40}
-                    className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/85 shadow-[0_38px_120px_-72px_rgba(15,23,42,0.95)]"
-                >
-                    <div className="relative flex-1 min-h-0 overflow-hidden">
-                        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.14),_transparent_65%)]" aria-hidden />
-                        <div ref={containerRef} className="relative z-10 h-full w-full min-h-0" />
-                    </div>
-                    <div className="border-t border-white/10 bg-slate-950/80 px-8 pb-8 pt-6 backdrop-blur">
-                        <div className="flex flex-wrap items-center gap-3 md:flex-nowrap">
-                            <button
-                                onClick={() => {
-                                    const rep = replayerRef.current;
-                                    if (!rep) return;
+        <div className="flex flex-1 flex-col gap-10 pb-12 text-slate-100">
+            <section className="flex flex-col gap-6">
+                <div className="relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-950/70 shadow-[0_38px_120px_-72px_rgba(15,23,42,0.95)]">
+                    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.14),_transparent_65%)]" aria-hidden />
+                    <div ref={containerRef} className="relative z-10 h-[320px] w-full sm:h-[420px] lg:h-[560px]" />
+                </div>
 
-                                    if (canPause) {
-                                        const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
-                                        lastPausedTimeRef.current = now;
-                                        rep.pause();
-                                        setPlayerStatus("paused");
-                                    } else if (canPlay) {
-                                        const resumeAt =
-                                            Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
-                                                ? lastPausedTimeRef.current
-                                                : (rep.getCurrentTime?.() ?? currentTime ?? 0);
-                                        rep.play(resumeAt);
-                                        setPlayerStatus("playing");
-                                    }
-                                }}
-                                className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-5 py-2.5 text-sm font-medium shadow-[0_16px_36px_-18px_rgba(15,23,42,0.95)] transition hover:border-white/40 hover:bg-white/10"
-                            >
-                                <PrimaryIcon className="h-4 w-4" />
-                                {primaryLabel}
-                            </button>
-                            <button
-                                onClick={() => {
-                                    const rep = replayerRef.current;
-                                    if (!rep) return;
+                <div className="rounded-3xl border border-white/10 bg-slate-950/80 px-6 py-5 shadow-[0_38px_120px_-72px_rgba(15,23,42,0.95)] backdrop-blur">
+                    <div className="flex flex-wrap items-center gap-3">
+                        <button
+                            onClick={() => {
+                                const rep = replayerRef.current;
+                                if (!rep) return;
+
+                                if (canPause) {
+                                    const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
+                                    lastPausedTimeRef.current = now;
                                     rep.pause();
-                                    lastPausedTimeRef.current = 0;
-                                    rep.play(0);
+                                    setPlayerStatus("paused");
+                                } else if (canPlay) {
+                                    const resumeAt =
+                                        Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
+                                            ? lastPausedTimeRef.current
+                                            : (rep.getCurrentTime?.() ?? currentTime ?? 0);
+                                    rep.play(resumeAt);
                                     setPlayerStatus("playing");
-                                    setCurrentTime(0);
-                                }}
-                                className="inline-flex items-center gap-2 rounded-full border border-white/10 px-5 py-2.5 text-sm text-slate-200 transition hover:border-white/30 hover:bg-white/10"
-                            >
-                                <IconRestart className="h-4 w-4" />
-                                Restart
-                            </button>
-                            <div className="order-3 flex w-full items-center justify-between gap-2 text-xs uppercase tracking-wide text-white/60 md:order-none md:w-auto md:justify-end md:pl-4">
-                                <span
-                                    className={`h-2 w-2 rounded-full ${statusChip.tone} ${statusChip.pulse ? "animate-pulse" : ""}`}
-                                    aria-hidden
-                                />
-                                <span className={`font-semibold ${statusChip.text}`}>{statusChip.label}</span>
-                            </div>
+                                }
+                            }}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-5 py-2.5 text-sm font-medium shadow-[0_16px_36px_-18px_rgba(15,23,42,0.95)] transition hover:border-white/40 hover:bg-white/10"
+                        >
+                            <PrimaryIcon className="h-4 w-4" />
+                            {primaryLabel}
+                        </button>
+                        <button
+                            onClick={() => {
+                                const rep = replayerRef.current;
+                                if (!rep) return;
+                                rep.pause();
+                                lastPausedTimeRef.current = 0;
+                                rep.play(0);
+                                setPlayerStatus("playing");
+                                setCurrentTime(0);
+                            }}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/10 px-5 py-2.5 text-sm text-slate-200 transition hover:border-white/30 hover:bg-white/10"
+                        >
+                            <IconRestart className="h-4 w-4" />
+                            Restart
+                        </button>
+                        <div className="flex items-center gap-2 text-xs uppercase tracking-[0.32em] text-white/60 sm:ml-auto">
+                            <span
+                                className={`h-2 w-2 rounded-full ${statusChip.tone} ${statusChip.pulse ? "animate-pulse" : ""}`}
+                                aria-hidden
+                            />
+                            <span className={`font-semibold ${statusChip.text}`}>{statusChip.label}</span>
                         </div>
+                    </div>
 
-                        <div className="mt-6 space-y-4">
-                            <div
-                                ref={trackRef}
-                                role="presentation"
-                                onPointerDown={handleTrackPointerDown}
-                                className="relative h-20 w-full cursor-pointer select-none rounded-3xl border border-white/10 bg-slate-950/80 px-6 py-5"
-                            >
-                                <div className="absolute left-6 right-6 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-white/10">
-                                    <div
-                                        className="h-full rounded-full bg-gradient-to-r from-sky-400 via-blue-500 to-indigo-500"
-                                        style={{ width: `${progress}%` }}
-                                    />
-                                </div>
+                    <div className="mt-6 space-y-4">
+                        <div
+                            ref={trackRef}
+                            role="presentation"
+                            onPointerDown={handleTrackPointerDown}
+                            className="relative h-24 w-full cursor-pointer select-none rounded-3xl border border-white/10 bg-slate-950/80 px-6 py-5"
+                        >
+                            <div className="absolute left-6 right-6 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-white/10">
+                                <div
+                                    className="h-full rounded-full bg-gradient-to-r from-sky-400 via-blue-500 to-indigo-500"
+                                    style={{ width: `${progress}%` }}
+                                />
+                            </div>
 
-                                {eventMarkers.map((marker) => {
-                                    const relativeLabel = formatRelativeTime(
-                                        (typeof marker.event._t === "number" && marker.event._t) ??
-                                        (typeof marker.event._startServer === "number" && marker.event._startServer) ??
-                                        (typeof marker.event._endServer === "number" && marker.event._endServer) ??
-                                        null,
-                                    );
-                                    const isActive = marker.aligned != null && Math.abs(marker.aligned - currentTime) <= 250;
-                                    const boxShadow = isActive
-                                        ? "0 0 0 2px rgba(15,23,42,0.95), 0 0 0 6px rgba(56,189,248,0.45)"
-                                        : "0 0 0 2px rgba(15,23,42,0.9)";
+                            {eventMarkers.map((marker) => {
+                                const relativeLabel = formatRelativeTime(
+                                    (typeof marker.event._t === "number" && marker.event._t) ??
+                                    (typeof marker.event._startServer === "number" && marker.event._startServer) ??
+                                    (typeof marker.event._endServer === "number" && marker.event._endServer) ??
+                                    null,
+                                );
+                                const isActive = marker.aligned != null && Math.abs(marker.aligned - currentTime) <= 250;
+                                const boxShadow = isActive
+                                    ? "0 0 0 2px rgba(15,23,42,0.95), 0 0 0 6px rgba(56,189,248,0.45)"
+                                    : "0 0 0 2px rgba(15,23,42,0.9)";
 
-                                    return (
-                                        <button
-                                            key={marker.id}
-                                            type="button"
-                                            title={`${marker.label}${relativeLabel && relativeLabel !== "—" ? ` · ${relativeLabel}` : ""}`}
-                                            aria-label={`${marker.label}${relativeLabel && relativeLabel !== "—" ? ` at ${relativeLabel}` : ""}`}
-                                            className="absolute top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full transition-transform duration-150 hover:-translate-y-[55%] hover:scale-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
-                                            style={{
-                                                left: `${marker.percent}%`,
-                                                backgroundColor: marker.color,
-                                                boxShadow,
-                                            }}
-                                            onPointerDown={(e) => e.stopPropagation()}
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                jumpToEvent(marker.event);
-                                            }}
-                                            onMouseEnter={() => setHoveredMarker(marker)}
-                                            onMouseLeave={() => {
-                                                setHoveredMarker((prev) => (prev?.id === marker.id ? null : prev));
-                                            }}
-                                            onFocus={() => setHoveredMarker(marker)}
-                                            onBlur={() => {
-                                                setHoveredMarker((prev) => (prev?.id === marker.id ? null : prev));
-                                            }}
-                                        />
-                                    );
-                                })}
-
-                                {hoveredMarker && hoveredPresentation && tooltipAnchor && (
-                                    <div
-                                        className="pointer-events-none absolute -top-28 z-20 w-64 max-w-[18rem] rounded-2xl border border-white/10 bg-slate-950/95 p-4 shadow-[0_22px_48px_-26px_rgba(15,23,42,0.95)] backdrop-blur"
+                                return (
+                                    <button
+                                        key={marker.id}
+                                        type="button"
+                                        title={`${marker.label}${relativeLabel && relativeLabel !== "—" ? ` · ${relativeLabel}` : ""}`}
+                                        aria-label={`${marker.label}${relativeLabel && relativeLabel !== "—" ? ` at ${relativeLabel}` : ""}`}
+                                        className="absolute top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full transition-transform duration-150 hover:-translate-y-[55%] hover:scale-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
                                         style={{
-                                            left: `${tooltipAnchor.left}%`,
-                                            transform: `translateX(${tooltipAnchor.translate})`,
+                                            left: `${marker.percent}%`,
+                                            backgroundColor: marker.color,
+                                            boxShadow,
                                         }}
-                                    >
-                                        <div className="flex items-start gap-3">
-                                            <span
-                                                className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5"
-                                                style={{ color: hoveredMarker.color, boxShadow: `0 18px 36px -24px ${hoveredMarker.color}AA` }}
-                                            >
-                                                <hoveredPresentation.Icon className="h-4 w-4" />
-                                            </span>
-                                            <div className="flex-1 space-y-2 text-sm text-white/80">
-                                                <div className="text-xs uppercase tracking-[0.2em] text-white/50">{hoveredPresentation.label}</div>
-                                                <div className="text-sm font-semibold text-white/90">
-                                                    {hoveredEvent?.label || hoveredEvent?.actionId || hoveredEvent?.meta?.url || hoveredEvent?.meta?.subject || "Timeline event"}
-                                                </div>
-                                                <div className="flex flex-wrap items-center gap-2 text-[11px] text-white/60">
-                                                    {hoveredRelative && hoveredRelative !== "—" && <span>{hoveredRelative}</span>}
-                                                    {hoveredRrwebLabel && <span>{hoveredRrwebLabel}</span>}
-                                                </div>
+                                        onPointerDown={(e) => e.stopPropagation()}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            jumpToEvent(marker.event);
+                                        }}
+                                        onMouseEnter={() => setHoveredMarker(marker)}
+                                        onMouseLeave={() => {
+                                            setHoveredMarker((prev) => (prev?.id === marker.id ? null : prev));
+                                        }}
+                                        onFocus={() => setHoveredMarker(marker)}
+                                        onBlur={() => {
+                                            setHoveredMarker((prev) => (prev?.id === marker.id ? null : prev));
+                                        }}
+                                    />
+                                );
+                            })}
 
-                                                {hoveredEvent?.kind === "request" && hoveredEvent?.meta?.method && (
-                                                    <div className="font-mono text-[11px] uppercase tracking-wider text-emerald-200">
-                                                        {hoveredEvent.meta.method}
-                                                        {hoveredEvent.meta.url && <span className="ml-2 text-white/60">{hoveredEvent.meta.url}</span>}
-                                                    </div>
-                                                )}
-
-                                                {hoveredEvent?.kind === "db" && hoveredEvent?.meta?.collection && (
-                                                    <div className="font-mono text-[11px] uppercase tracking-wider text-amber-200">
-                                                        {hoveredEvent.meta.collection} • {hoveredEvent.meta.op}
-                                                    </div>
-                                                )}
-
-                                                {hoveredEvent?.kind === "email" && hoveredEvent?.meta?.to && (
-                                                    <div className="text-[11px] text-white/60">To {hoveredEvent.meta.to}</div>
-                                                )}
+                            {hoveredMarker && hoveredPresentation && tooltipAnchor && (
+                                <div
+                                    className="pointer-events-none absolute top-full z-20 mt-3 w-64 max-w-[18rem] rounded-2xl border border-white/10 bg-slate-950/95 p-4 shadow-[0_22px_48px_-26px_rgba(15,23,42,0.95)] backdrop-blur"
+                                    style={{
+                                        left: `${tooltipAnchor.left}%`,
+                                        transform: `translateX(${tooltipAnchor.translate})`,
+                                    }}
+                                >
+                                    <div className="flex items-start gap-3">
+                                        <span
+                                            className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5"
+                                            style={{ color: hoveredMarker.color, boxShadow: `0 18px 36px -24px ${hoveredMarker.color}AA` }}
+                                        >
+                                            <hoveredPresentation.Icon className="h-4 w-4" />
+                                        </span>
+                                        <div className="flex-1 space-y-2 text-sm text-white/80">
+                                            <div className="text-xs uppercase tracking-[0.2em] text-white/50">{hoveredPresentation.label}</div>
+                                            <div className="text-sm font-semibold text-white/90">
+                                                {hoveredEvent?.label || hoveredEvent?.actionId || hoveredEvent?.meta?.url || hoveredEvent?.meta?.subject || "Timeline event"}
                                             </div>
+                                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-white/60">
+                                                {hoveredRelative && hoveredRelative !== "—" && <span>{hoveredRelative}</span>}
+                                                {hoveredRrwebLabel && <span>{hoveredRrwebLabel}</span>}
+                                            </div>
+
+                                            {hoveredEvent?.kind === "request" && hoveredEvent?.meta?.method && (
+                                                <div className="font-mono text-[11px] uppercase tracking-wider text-emerald-200">
+                                                    {hoveredEvent.meta.method}
+                                                    {hoveredEvent.meta.url && <span className="ml-2 text-white/60">{hoveredEvent.meta.url}</span>}
+                                                </div>
+                                            )}
+
+                                            {hoveredEvent?.kind === "db" && hoveredEvent?.meta?.collection && (
+                                                <div className="font-mono text-[11px] uppercase tracking-wider text-amber-200">
+                                                    {hoveredEvent.meta.collection} • {hoveredEvent.meta.op}
+                                                </div>
+                                            )}
+
+                                            {hoveredEvent?.kind === "email" && hoveredEvent?.meta?.to && (
+                                                <div className="text-[11px] text-white/60">To {hoveredEvent.meta.to}</div>
+                                            )}
                                         </div>
                                     </div>
-                                )}
-                            </div>
+                                </div>
+                            )}
+                        </div>
 
-                            <div className="flex items-center justify-between text-xs text-white/60">
-                                <span>0s</span>
-                                <span className="font-medium text-white/80">{currentSeconds.toFixed(currentSeconds >= 10 ? 0 : 1)}s</span>
-                                <span>{totalSeconds > 0 ? totalSeconds.toFixed(totalSeconds >= 10 ? 0 : 1) : "0"}s</span>
-                            </div>
+                        <div className="flex items-center justify-between text-xs text-white/60">
+                            <span>0s</span>
+                            <span className="font-medium text-white/80">{currentSeconds.toFixed(currentSeconds >= 10 ? 0 : 1)}s</span>
+                            <span>{totalSeconds > 0 ? totalSeconds.toFixed(totalSeconds >= 10 ? 0 : 1) : "0"}s</span>
                         </div>
                     </div>
-                </Panel>
+                </div>
+            </section>
 
-                <PanelResizeHandle className="group relative flex w-3 items-center justify-center rounded-full bg-slate-950/40 transition hover:bg-slate-900/60">
-                    <span className="h-3/4 w-px rounded-full bg-white/10 transition group-hover:bg-white/30" />
-                    <span className="pointer-events-none absolute inset-y-1/3 left-1/2 hidden -translate-x-1/2 flex-col items-center justify-center text-[10px] uppercase tracking-[0.3em] text-white/40 group-hover:flex">
-                        Drag
-                    </span>
-                </PanelResizeHandle>
+            <section className="rounded-3xl border border-white/10 bg-slate-950/70 px-6 py-6 shadow-[0_38px_120px_-72px_rgba(15,23,42,0.95)] backdrop-blur">
+                <header className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                        <div className="text-xs uppercase tracking-[0.2em] text-white/50">Session intelligence</div>
+                        <h2 className="mt-1 text-2xl font-semibold text-white">Timeline of signals</h2>
+                        <p className="mt-1 max-w-2xl text-sm text-white/60">{highlightCopy}</p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setShowAll((prev) => !prev)}
+                        className={`relative inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
+                            showAll
+                                ? "border-sky-400/60 bg-sky-500/10 text-sky-200 shadow-[0_12px_30px_-18px_rgba(56,189,248,0.65)]"
+                                : "border-white/10 bg-white/5 text-white/70 hover:border-white/30 hover:bg-white/10"
+                        }`}
+                    >
+                        <span className={`inline-flex h-2.5 w-2.5 rounded-full ${showAll ? "bg-sky-300" : "bg-white/40"}`} aria-hidden />
+                        {showAll ? "Showing all events" : "Show all events"}
+                    </button>
+                </header>
 
-                <Panel
-                    defaultSize={38}
-                    minSize={25}
-                    className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/80 shadow-[0_38px_120px_-72px_rgba(15,23,42,0.95)]"
-                >
-                    <aside className="flex h-full min-h-0 flex-1 flex-col">
-                        <div className="flex-1 overflow-y-auto px-7 py-6">
-                            <header className="sticky top-0 z-20 flex flex-wrap items-start justify-between gap-4 rounded-3xl border border-white/10 bg-slate-950/80 px-5 py-4 backdrop-blur">
-                                <div>
-                                    <div className="text-xs uppercase tracking-[0.2em] text-white/50">Session intelligence</div>
-                                    <h2 className="mt-1 text-2xl font-semibold text-white">Timeline of signals</h2>
-                                    <p className="mt-1 text-sm text-white/60">{highlightCopy}</p>
-                                </div>
-                            <button
-                                type="button"
-                                onClick={() => setShowAll((prev) => !prev)}
-                                className={`relative inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
-                                    showAll
-                                        ? "border-sky-400/60 bg-sky-500/10 text-sky-200 shadow-[0_12px_30px_-18px_rgba(56,189,248,0.65)]"
-                                        : "border-white/10 bg-white/5 text-white/70 hover:border-white/30 hover:bg-white/10"
-                                }`}
-                            >
-                                <span className={`inline-flex h-2.5 w-2.5 rounded-full ${showAll ? "bg-sky-300" : "bg-white/40"}`} aria-hidden />
-                                {showAll ? "Showing all events" : "Show all events"}
-                            </button>
-                        </header>
+                <div className="mt-6 space-y-4">
+                    {playerStatus === "no-rrweb" && (
+                        <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+                            No rrweb events (or too few to initialize) were captured for this session.
+                        </div>
+                    )}
 
-                        <div className="mt-6 space-y-4">
-                            {playerStatus === "no-rrweb" && (
-                                <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
-                                    No rrweb events (or too few to initialize) were captured for this session.
-                                </div>
-                            )}
+                    {!ticks.length && (
+                        <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-white/70">
+                            No backend timeline data has been recorded for this session yet.
+                        </div>
+                    )}
 
-                            {!ticks.length && (
-                                <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-white/70">
-                                    No backend timeline data has been recorded for this session yet.
-                                </div>
-                            )}
-
+                    {renderGroups.length > 0 && (
+                        <div className="-mb-4 flex gap-4 overflow-x-auto pb-4">
                             {renderGroups.map((g, gi) => {
                                 const action = g.items.find((it) => it.kind === "action");
                                 const title = action?.label || action?.actionId || "Other events";
                                 const windowLabel = formatActionWindow(action);
-                                const isExpanded = expandedGroups[gi] ?? true;
 
                                 return (
                                     <div
                                         key={g.id || gi}
-                                        className="rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 via-white/5 to-transparent p-5 shadow-[0_32px_80px_-48px_rgba(15,23,42,1)]"
+                                        className="flex min-w-[320px] max-w-[360px] flex-1 snap-start flex-col rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 via-white/5 to-transparent p-5 shadow-[0_32px_80px_-48px_rgba(15,23,42,1)]"
                                     >
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setExpandedGroups((prev) => ({
-                                                    ...prev,
-                                                    [gi]: !isExpanded,
-                                                }));
-                                            }}
-                                            className="flex w-full items-center justify-between gap-4 text-left"
-                                        >
+                                        <div className="flex items-start justify-between gap-3">
                                             <div>
                                                 <div className="text-xs uppercase tracking-[0.24em] text-white/50">Action group</div>
                                                 <div className="mt-1 text-lg font-semibold text-white">{title}</div>
-                                                {windowLabel && (
-                                                    <div className="mt-1 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] text-white/60">
-                                                        <IconClock className="h-3.5 w-3.5" />
-                                                        {windowLabel}
-                                                    </div>
-                                                )}
                                             </div>
-                                            <span
-                                                className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/70 transition-transform duration-200"
-                                                style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)" }}
-                                            >
-                                                <IconChevronDown className="h-4 w-4" />
-                                            </span>
-                                        </button>
+                                            {windowLabel && (
+                                                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] text-white/60">
+                                                    <IconClock className="h-3.5 w-3.5" />
+                                                    {windowLabel}
+                                                </div>
+                                            )}
+                                        </div>
 
-                                        <div
-                                            className={`overflow-hidden transition-all duration-300 ease-out ${
-                                                isExpanded
-                                                    ? "pointer-events-auto mt-4 max-h-[1200px] opacity-100"
-                                                    : "pointer-events-none max-h-0 opacity-0"
-                                            }`}
-                                        >
-                                            <div className="space-y-3 py-1">
-                                                {g.items.map((e, i) => {
-                                                    const aligned = toRrwebTime(e._t);
-                                                    const { label, Icon, accent } = getKindPresentation(e.kind);
-                                                    const relative = formatRelativeTime(e._t ?? e._startServer ?? e._endServer);
+                                        <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1 max-h-80">
+                                            {g.items.map((e, i) => {
+                                                const aligned = toRrwebTime(e._t);
+                                                const { label, Icon, accent } = getKindPresentation(e.kind);
+                                                const relative = formatRelativeTime(e._t ?? e._startServer ?? e._endServer);
 
-                                                    return (
-                                                        <button
-                                                            key={i}
-                                                            type="button"
-                                                            onClick={() => jumpToEvent(e)}
-                                                            className="group flex w-full items-start gap-4 rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-4 text-left shadow-[0_18px_40px_-24px_rgba(15,23,42,0.95)] transition duration-200 hover:-translate-y-0.5 hover:border-white/30 hover:bg-slate-900/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60"
-                                                        >
-                                                            <span className={`mt-1 flex h-10 w-10 items-center justify-center rounded-full border ${accent}`}>
-                                                                <Icon className="h-4 w-4" />
-                                                            </span>
-                                                            <div className="flex-1 space-y-2">
-                                                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs uppercase tracking-[0.18em] text-white/50">
-                                                                    <span>{label}</span>
-                                                                    {relative !== "—" && (
-                                                                        <span className="flex items-center gap-2 text-[11px] normal-case text-white/60">
-                                                                            <span className="h-1.5 w-1.5 rounded-full bg-white/30" />
-                                                                            {relative}
-                                                                        </span>
-                                                                    )}
-                                                                    {typeof aligned === "number" && (
-                                                                        <span className="text-[11px] normal-case text-white/40">
-                                                                            ~{Math.round(aligned)}ms rrweb
-                                                                        </span>
-                                                                    )}
-                                                                </div>
-
-                                                                {e.kind === "request" && (
-                                                                    <div className="space-y-1 text-sm text-white/80">
-                                                                        <div className="font-mono text-[12px] uppercase tracking-wider text-emerald-200">
-                                                                            {e.meta?.method}
-                                                                            <span className="ml-2 text-white/60">{e.meta?.url}</span>
-                                                                        </div>
-                                                                        <div className="flex flex-wrap items-center gap-3 text-[12px] text-white/60">
-                                                                            <span className={statusTone(e.meta?.status)}>Status {e.meta?.status ?? "—"}</span>
-                                                                            {typeof e.meta?.durMs === "number" && (
-                                                                                <span>Duration {e.meta.durMs}ms</span>
-                                                                            )}
-                                                                        </div>
-                                                                    </div>
+                                                return (
+                                                    <button
+                                                        key={i}
+                                                        type="button"
+                                                        onClick={() => jumpToEvent(e)}
+                                                        className="group flex w-full items-start gap-4 rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-4 text-left shadow-[0_18px_40px_-24px_rgba(15,23,42,0.95)] transition duration-200 hover:-translate-y-0.5 hover:border-white/30 hover:bg-slate-900/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60"
+                                                    >
+                                                        <span className={`mt-1 flex h-10 w-10 items-center justify-center rounded-full border ${accent}`}>
+                                                            <Icon className="h-4 w-4" />
+                                                        </span>
+                                                        <div className="flex-1 space-y-2">
+                                                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs uppercase tracking-[0.18em] text-white/50">
+                                                                <span>{label}</span>
+                                                                {relative !== "—" && (
+                                                                    <span className="flex items-center gap-2 text-[11px] normal-case text-white/60">
+                                                                        <span className="h-1.5 w-1.5 rounded-full bg-white/30" />
+                                                                        {relative}
+                                                                    </span>
                                                                 )}
-
-                                                                {e.kind === "db" && (
-                                                                    <div className="space-y-2 text-sm text-white/80">
-                                                                        <div className="font-mono text-xs uppercase tracking-wider text-amber-200">
-                                                                            {e.meta?.collection} • {e.meta?.op}
-                                                                        </div>
-                                                                        {e.meta?.query && (
-                                                                            <pre className="max-h-40 overflow-auto rounded-xl border border-white/5 bg-slate-900/80 p-3 text-[11px] leading-relaxed text-white/70">
-                                                                                {JSON.stringify(e.meta.query, null, 2)}
-                                                                            </pre>
-                                                                        )}
-                                                                        {e.meta?.resultMeta && (
-                                                                            <div className="text-xs text-white/50">
-                                                                                Result {JSON.stringify(e.meta.resultMeta)}
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                )}
-
-                                                                {e.kind === "action" && (
-                                                                    <div className="space-y-1 text-sm text-white/80">
-                                                                        <div className="font-semibold text-white/90">{e.label || e.actionId}</div>
-                                                                        {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
-                                                                            <div className="text-xs text-white/50">[{formatRelativeTime(e.tStart)} → {formatRelativeTime(e.tEnd)}]</div>
-                                                                        )}
-                                                                    </div>
-                                                                )}
-
-                                                                {e.kind === "email" && (
-                                                                    <div className="text-sm text-white/80">
-                                                                        <EmailItem meta={e.meta} />
-                                                                    </div>
-                                                                )}
-
-                                                                {!['request', 'db', 'action', 'email'].includes(e.kind) && (
-                                                                    <div className="text-sm text-white/80">
-                                                                        <pre className="text-[11px] text-white/60">{JSON.stringify(e, null, 2)}</pre>
-                                                                    </div>
+                                                                {typeof aligned === "number" && (
+                                                                    <span className="text-[11px] normal-case text-white/40">
+                                                                        ~{Math.round(aligned)}ms rrweb
+                                                                    </span>
                                                                 )}
                                                             </div>
-                                                        </button>
-                                                    );
-                                                })}
-                                            </div>
+
+                                                            {e.kind === "request" && (
+                                                                <div className="space-y-1 text-sm text-white/80">
+                                                                    <div className="font-mono text-[12px] uppercase tracking-wider text-emerald-200">
+                                                                        {e.meta?.method}
+                                                                        <span className="ml-2 text-white/60">{e.meta?.url}</span>
+                                                                    </div>
+                                                                    <div className="flex flex-wrap items-center gap-3 text-[12px] text-white/60">
+                                                                        <span className={statusTone(e.meta?.status)}>Status {e.meta?.status ?? "—"}</span>
+                                                                        {typeof e.meta?.durMs === "number" && (
+                                                                            <span>Duration {e.meta.durMs}ms</span>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            )}
+
+                                                            {e.kind === "db" && (
+                                                                <div className="space-y-2 text-sm text-white/80">
+                                                                    <div className="font-mono text-xs uppercase tracking-wider text-amber-200">
+                                                                        {e.meta?.collection} • {e.meta?.op}
+                                                                    </div>
+                                                                    {e.meta?.query && (
+                                                                        <pre className="max-h-40 overflow-auto rounded-xl border border-white/5 bg-slate-900/80 p-3 text-[11px] leading-relaxed text-white/70">
+                                                                            {JSON.stringify(e.meta.query, null, 2)}
+                                                                        </pre>
+                                                                    )}
+                                                                    {e.meta?.resultMeta && (
+                                                                        <div className="text-xs text-white/50">
+                                                                            Result {JSON.stringify(e.meta.resultMeta)}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )}
+
+                                                            {e.kind === "action" && (
+                                                                <div className="space-y-1 text-sm text-white/80">
+                                                                    <div className="font-semibold text-white/90">{e.label || e.actionId}</div>
+                                                                    {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
+                                                                        <div className="text-xs text-white/50">[{formatRelativeTime(e.tStart)} → {formatRelativeTime(e.tEnd)}]</div>
+                                                                    )}
+                                                                </div>
+                                                            )}
+
+                                                            {e.kind === "email" && (
+                                                                <div className="text-sm text-white/80">
+                                                                    <EmailItem meta={e.meta} />
+                                                                </div>
+                                                            )}
+
+                                                            {!['request', 'db', 'action', 'email'].includes(e.kind) && (
+                                                                <div className="text-sm text-white/80">
+                                                                    <pre className="text-[11px] text-white/60">{JSON.stringify(e, null, 2)}</pre>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </button>
+                                                );
+                                            })}
                                         </div>
                                     </div>
                                 );
                             })}
-
-                            {!renderGroups.length && !showAll && (
-                                <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-5 text-sm text-white/70">
-                                    No events near the current replay moment. You can
-                                    <button className="ml-1 underline" onClick={() => setShowAll(true)}>
-                                        show the entire stream
-                                    </button>
-                                    .
-                                </div>
-                            )}
-
-                            {hasHiddenEvents && (
-                                <button
-                                    type="button"
-                                    onClick={() => setShowAll(true)}
-                                    className="flex w-full items-center justify-center rounded-2xl border border-sky-400/50 bg-sky-500/10 px-4 py-3 text-sm font-semibold text-sky-200 shadow-[0_18px_40px_-30px_rgba(56,189,248,0.8)] transition hover:border-sky-300 hover:bg-sky-500/20"
-                                >
-                                    Show all {ticks.length} events
-                                </button>
-                            )}
                         </div>
+                    )}
+
+                    {!renderGroups.length && !showAll && (
+                        <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-5 text-sm text-white/70">
+                            No events near the current replay moment. You can
+                            <button className="ml-1 underline" onClick={() => setShowAll(true)}>
+                                show the entire stream
+                            </button>
+                            .
                         </div>
-                    </aside>
-                </Panel>
-            </PanelGroup>
+                    )}
+
+                    {hasHiddenEvents && (
+                        <button
+                            type="button"
+                            onClick={() => setShowAll(true)}
+                            className="flex w-full items-center justify-center rounded-2xl border border-sky-400/50 bg-sky-500/10 px-4 py-3 text-sm font-semibold text-sky-200 shadow-[0_18px_40px_-30px_rgba(56,189,248,0.8)] transition hover:border-sky-300 hover:bg-sky-500/20"
+                        >
+                            Show all {ticks.length} events
+                        </button>
+                    )}
+                </div>
+            </section>
         </div>
     );
 }
