@@ -20,6 +20,22 @@ const KIND_COLORS = {
     default: "#cbd5f5",
 };
 
+function eventKeyFor(ev, fallback = 0) {
+    if (!ev || typeof ev !== "object") {
+        return `event-${fallback}`;
+    }
+
+    const parts = [ev.kind || "event", ev.actionId, ev.id, ev.meta?.id, ev.meta?.requestId, ev.meta?.emailId]
+        .filter(Boolean)
+        .map(String);
+
+    if (parts.length) {
+        return parts.join(":");
+    }
+
+    return `${ev.kind || "event"}-${fallback}`;
+}
+
 const iconStroke = {
     fill: "none",
     stroke: "currentColor",
@@ -295,8 +311,11 @@ export default function SessionReplay({ sessionId }) {
             const alignedStart = typeof zero === "number" && typeof start === "number" ? (start - zero) : null;
             const alignedEnd   = typeof zero === "number" && typeof end   === "number" ? (end   - zero) : null;
 
+            const key = eventKeyFor(ev, out.length);
+
             out.push({
                 ...ev,
+                _key: key,
                 _t: tickTime(ev),           // original server “point” for display fallbacks
                 _startServer: start,        // server ms
                 _endServer: end,            // server ms
@@ -338,6 +357,8 @@ export default function SessionReplay({ sessionId }) {
     const renderGroups = React.useMemo(() => {
         return groupByAction(baseItems);
     }, [baseItems]);
+
+    const timelineSequence = useMemo(() => flattenGrouped(renderGroups), [renderGroups]);
 
     const timelineAnchor = useMemo(() => {
         if (!ticks.length) return null;
@@ -583,8 +604,8 @@ export default function SessionReplay({ sessionId }) {
 
                 if (aligned == null || !Number.isFinite(aligned)) return null;
                 const percent = Math.max(0, Math.min(100, (aligned / totalTime) * 100));
-                const key = `${ev.kind}-${ev.actionId ?? ev.id ?? idx}`;
-                const { label } = getKindPresentation(ev.kind);
+                const key = ev._key || eventKeyFor(ev, idx);
+                const { label, Icon } = getKindPresentation(ev.kind);
                 const color = KIND_COLORS[ev.kind] ?? KIND_COLORS.default;
 
                 return {
@@ -592,6 +613,7 @@ export default function SessionReplay({ sessionId }) {
                     percent,
                     event: ev,
                     label,
+                    Icon,
                     color,
                     aligned,
                 };
@@ -612,21 +634,40 @@ export default function SessionReplay({ sessionId }) {
 
             let name = ev.label || presentation.label;
             let detail = null;
+            const detailLines = [];
+            const badges = [];
             if (ev.kind === "request") {
                 const method = ev.meta?.method;
                 const url = ev.meta?.url;
                 name = ev.meta?.name || url || name;
                 detail = [method, url].filter(Boolean).join(" · ");
+                if (ev.meta?.status) badges.push(`Status ${ev.meta.status}`);
+                if (ev.meta?.service) detailLines.push(ev.meta.service);
             } else if (ev.kind === "db") {
                 const collection = ev.meta?.collection;
                 const op = ev.meta?.op;
                 name = collection ? `${collection}${op ? ` • ${op}` : ""}` : name;
                 detail = [collection, op].filter(Boolean).join(" · ");
+                if (op) badges.push(op);
+                if (ev.meta?.resultMeta) {
+                    detailLines.push(`Result ${JSON.stringify(ev.meta.resultMeta)}`);
+                }
+                if (ev.meta?.query) {
+                    let query = "";
+                    try {
+                        query = typeof ev.meta.query === "string" ? ev.meta.query : JSON.stringify(ev.meta.query);
+                    } catch (err) {
+                        query = "[query]";
+                    }
+                    const preview = query.length > 140 ? `${query.slice(0, 137)}…` : query;
+                    detailLines.push(preview);
+                }
             } else if (ev.kind === "email") {
                 const subject = ev.meta?.subject;
                 const to = ev.meta?.to;
                 name = subject || name;
                 detail = to ? `To ${to}` : detail;
+                if (ev.meta?.provider) detailLines.push(ev.meta.provider);
             } else if (ev.kind === "action") {
                 const description = ev.meta?.description;
                 name = description || name;
@@ -637,15 +678,25 @@ export default function SessionReplay({ sessionId }) {
             }
 
             const duration = typeof ev?.meta?.durMs === "number" ? ev.meta.durMs : null;
+            const windowLabel =
+                ev.kind === "action" && typeof ev.tStart === "number" && typeof ev.tEnd === "number"
+                    ? `${formatRelativeTime(ev.tStart)} → ${formatRelativeTime(ev.tEnd)}`
+                    : null;
+            if (windowLabel) badges.push(windowLabel);
+            if (detail) {
+                detailLines.unshift(detail);
+            }
 
             return {
-                id: `${ev.kind}-${ev.actionId ?? ev.id ?? idx}`,
+                id: ev._key || `${ev.kind}-${ev.actionId ?? ev.id ?? idx}`,
                 event: ev,
                 kind: ev.kind ?? "other",
                 color: KIND_COLORS[ev.kind] ?? KIND_COLORS.default,
                 title: presentation.label,
                 name,
-                detail: detail || null,
+                detail: detailLines.length ? detailLines[0] : null,
+                lines: detailLines,
+                badges,
                 relative: formatRelativeTime(baseTime ?? ev._startServer ?? ev._endServer ?? ev._t ?? null),
                 durationLabel: duration ? `${Math.round(duration)}ms` : null,
                 serverTime: baseTime,
@@ -785,8 +836,8 @@ export default function SessionReplay({ sessionId }) {
     }, [jumpToEvent]);
 
     return (
-        <div className="flex w-full flex-1 flex-col gap-10 pb-12 text-slate-100">
-            <section className="flex w-full flex-col gap-6">
+        <div className="flex w-full flex-1 flex-col gap-12 px-6 pb-16 text-slate-100 sm:px-10 lg:px-16 xl:px-20 2xl:px-24">
+            <section className="-mx-6 flex w-auto flex-col gap-6 sm:-mx-10 lg:-mx-16 xl:-mx-20 2xl:-mx-24">
                 <div className="relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-950/70 shadow-[0_38px_120px_-72px_rgba(15,23,42,0.95)]">
                     <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.14),_transparent_65%)]" aria-hidden />
                     <div ref={containerRef} className="relative z-10 h-[320px] w-full sm:h-[420px] lg:h-[560px]" />
@@ -842,12 +893,12 @@ export default function SessionReplay({ sessionId }) {
                         </div>
                     </div>
 
-                    <div className="mt-6 space-y-4">
+                    <div className="mt-6 space-y-6">
                         <div
                             ref={trackRef}
                             role="presentation"
                             onPointerDown={handleTrackPointerDown}
-                            className="relative h-24 w-full cursor-pointer select-none overflow-visible rounded-3xl border border-white/10 bg-slate-950/80 px-6 py-5"
+                            className="relative z-30 h-24 w-full cursor-pointer select-none overflow-visible rounded-3xl border border-white/10 bg-slate-950/80 px-6 py-5"
                         >
                             <div className="absolute left-6 right-6 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-white/10">
                                 <div
@@ -874,12 +925,12 @@ export default function SessionReplay({ sessionId }) {
                                         type="button"
                                         title={`${marker.label}${relativeLabel && relativeLabel !== "—" ? ` · ${relativeLabel}` : ""}`}
                                         aria-label={`${marker.label}${relativeLabel && relativeLabel !== "—" ? ` at ${relativeLabel}` : ""}`}
-                                        className="absolute top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full transition-transform duration-150 hover:-translate-y-[55%] hover:scale-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                                        className="absolute top-1/2 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-slate-950 transition-transform duration-150 hover:-translate-y-[55%] hover:scale-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
                                         style={{
                                             left: `${marker.percent}%`,
                                             backgroundColor: marker.color,
                                             boxShadow,
-                                            zIndex: 20,
+                                            zIndex: 40,
                                         }}
                                         onPointerDown={(e) => e.stopPropagation()}
                                         onClick={(e) => {
@@ -894,13 +945,15 @@ export default function SessionReplay({ sessionId }) {
                                         onBlur={() => {
                                             setHoveredMarker((prev) => (prev?.id === marker.id ? null : prev));
                                         }}
-                                    />
+                                    >
+                                        {marker.Icon && <marker.Icon className="h-4 w-4" />}
+                                    </button>
                                 );
                             })}
 
                             {hoveredMarker && hoveredPresentation && tooltipAnchor && (
                                 <div
-                                    className="pointer-events-none absolute top-full z-20 mt-3 w-64 max-w-[18rem] rounded-2xl border border-white/10 bg-slate-950/95 p-4 shadow-[0_22px_48px_-26px_rgba(15,23,42,0.95)] backdrop-blur"
+                                    className="pointer-events-none absolute top-full z-50 mt-3 w-64 max-w-[18rem] rounded-2xl border border-white/10 bg-slate-950/95 p-4 shadow-[0_22px_48px_-26px_rgba(15,23,42,0.95)] backdrop-blur"
                                     style={{
                                         left: `${tooltipAnchor.left}%`,
                                         transform: `translateX(${tooltipAnchor.translate})`,
@@ -990,7 +1043,7 @@ export default function SessionReplay({ sessionId }) {
                     </div>
                 </header>
 
-                <div className="mt-6 space-y-4">
+                <div className="mt-6 space-y-6">
                     {playerStatus === "no-rrweb" && (
                         <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
                             No rrweb events (or too few to initialize) were captured for this session.
@@ -1003,8 +1056,74 @@ export default function SessionReplay({ sessionId }) {
                         </div>
                     )}
 
+                    {timelineSequence.length > 0 && (
+                        <div className="-mx-4 overflow-x-auto px-4">
+                            <div className="flex min-w-full snap-x items-stretch gap-3 pb-2">
+                                {timelineSequence.map((ev, idx) => {
+                                    const key = ev._key || eventKeyFor(ev, idx);
+                                    const { label, Icon, accent } = getKindPresentation(ev.kind);
+                                    const name = ev.label || ev.meta?.name || label;
+                                    const relative = formatRelativeTime(
+                                        (typeof ev._t === "number" && ev._t) ??
+                                        (typeof ev._startServer === "number" && ev._startServer) ??
+                                        (typeof ev._endServer === "number" && ev._endServer) ??
+                                        null,
+                                    );
+                                    const aligned = alignedSeekMsFor(ev);
+                                    const percent =
+                                        aligned != null && Number.isFinite(aligned) && totalTime > 0
+                                            ? Math.max(0, Math.min(100, (aligned / totalTime) * 100))
+                                            : null;
+
+                                    const handleHover = () => {
+                                        if (percent == null || !Number.isFinite(percent)) return;
+                                        setHoveredMarker({
+                                            id: key,
+                                            percent,
+                                            event: ev,
+                                            color: KIND_COLORS[ev.kind] ?? KIND_COLORS.default,
+                                            label,
+                                            aligned,
+                                            Icon,
+                                        });
+                                    };
+
+                                    const handleLeave = () => {
+                                        setHoveredMarker((prev) => (prev?.id === key ? null : prev));
+                                    };
+
+                                    return (
+                                        <button
+                                            key={key}
+                                            type="button"
+                                            className={`group flex min-w-[220px] snap-start items-center gap-3 rounded-2xl border px-4 py-3 text-left text-sm text-white transition ${accent}`}
+                                            onClick={() => jumpToEvent(ev)}
+                                            onMouseEnter={handleHover}
+                                            onFocus={handleHover}
+                                            onMouseLeave={handleLeave}
+                                            onBlur={handleLeave}
+                                        >
+                                            <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/10 text-white">
+                                                <Icon className="h-4 w-4" />
+                                            </span>
+                                            <div className="min-w-0 flex-1">
+                                                <div className="truncate text-sm font-semibold text-white">{name}</div>
+                                                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.28em] text-white/60">
+                                                    <span>{label}</span>
+                                                    {relative && relative !== "—" && (
+                                                        <span className="tracking-normal text-white/50">{relative}</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
                     {renderGroups.length > 0 && (
-                        <div className="-mb-4 flex gap-4 overflow-x-auto pb-4">
+                        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                             {renderGroups.map((g, gi) => {
                                 const action = g.items.find((it) => it.kind === "action");
                                 const title = action?.label || action?.actionId || "Other events";
@@ -1013,7 +1132,7 @@ export default function SessionReplay({ sessionId }) {
                                 return (
                                     <div
                                         key={g.id || gi}
-                                        className="flex min-w-[320px] max-w-[360px] flex-1 snap-start flex-col rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 via-white/5 to-transparent p-5 shadow-[0_32px_80px_-48px_rgba(15,23,42,1)]"
+                                        className="flex flex-col rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 via-white/5 to-transparent p-5 shadow-[0_32px_80px_-48px_rgba(15,23,42,1)]"
                                     >
                                         <div className="flex items-start justify-between gap-3">
                                             <div>
@@ -1028,7 +1147,7 @@ export default function SessionReplay({ sessionId }) {
                                             )}
                                         </div>
 
-                                        <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1 max-h-80">
+                                        <div className="mt-4 max-h-96 flex-1 space-y-3 overflow-y-auto pr-1">
                                             {g.items.map((e, i) => {
                                                 const aligned = toRrwebTime(e._t);
                                                 const { label, Icon, accent } = getKindPresentation(e.kind);
@@ -1036,7 +1155,7 @@ export default function SessionReplay({ sessionId }) {
 
                                                 return (
                                                     <button
-                                                        key={i}
+                                                        key={e._key || i}
                                                         type="button"
                                                         onClick={() => jumpToEvent(e)}
                                                         className="group flex w-full items-start gap-4 rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-4 text-left shadow-[0_18px_40px_-24px_rgba(15,23,42,0.95)] transition duration-200 hover:-translate-y-0.5 hover:border-white/30 hover:bg-slate-900/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60"

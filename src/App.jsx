@@ -80,7 +80,7 @@ export default function App() {
                 </div>
             </header>
 
-            <main className="relative z-10 flex flex-1 flex-col px-10 pb-14 pt-8">
+            <main className="relative z-10 flex flex-1 flex-col pb-14 pt-8">
                 <Routes>
                     {/* MAIN route: SessionReplay */}
                     <Route path="/" element={<SessionReplayRoute />} />

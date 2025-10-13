@@ -24,7 +24,16 @@ const DEFAULT_COLORS = {
     other: "#cbd5f5",
 };
 
+const LANE_ORDER = ["action", "request", "db", "email", "other"];
+
 function SignalNode({ data }) {
+    const lines = Array.isArray(data.lines) && data.lines.length
+        ? data.lines
+        : data.detail
+            ? [data.detail]
+            : [];
+    const badges = Array.isArray(data.badges) ? data.badges : [];
+
     return (
         <div className="pointer-events-auto w-64 max-w-[280px] rounded-2xl border border-white/10 bg-slate-950/90 p-4 shadow-[0_22px_48px_-28px_rgba(15,23,42,1)] backdrop-blur transition hover:border-white/30 hover:bg-slate-900/80">
             <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.34em] text-white/50">
@@ -38,9 +47,13 @@ function SignalNode({ data }) {
 
             <div className="mt-2 text-sm font-semibold text-white">{data.name || data.title}</div>
 
-            {data.detail && (
-                <div className="mt-1 text-xs text-white/60">
-                    {data.detail}
+            {lines.length > 0 && (
+                <div className="mt-1 space-y-1 text-xs text-white/65">
+                    {lines.map((line, idx) => (
+                        <div key={`${data.id || "line"}-${idx}`} className="truncate">
+                            {line}
+                        </div>
+                    ))}
                 </div>
             )}
 
@@ -48,6 +61,19 @@ function SignalNode({ data }) {
                 {data.relative && <span className="text-sky-200">{data.relative}</span>}
                 {data.durationLabel && <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-white/60">{data.durationLabel}</span>}
             </div>
+
+            {badges.length > 0 && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.28em] text-white/60">
+                    {badges.map((badge, idx) => (
+                        <span
+                            key={`${data.id || "badge"}-${idx}`}
+                            className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-white/70"
+                        >
+                            {badge}
+                        </span>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }
@@ -116,6 +142,24 @@ function buildGraph(events) {
     let maxTime = -Infinity;
     const laneIndexMap = new Map();
     const nodes = [];
+    const presentKinds = new Set();
+
+    sorted.forEach((item) => {
+        const kindKey = LANE_LABELS[item.kind] ? item.kind : "other";
+        presentKinds.add(kindKey);
+    });
+
+    LANE_ORDER.forEach((kind) => {
+        if (presentKinds.has(kind) && !laneIndexMap.has(kind)) {
+            laneIndexMap.set(kind, laneIndexMap.size);
+        }
+    });
+
+    presentKinds.forEach((kind) => {
+        if (!laneIndexMap.has(kind)) {
+            laneIndexMap.set(kind, laneIndexMap.size);
+        }
+    });
 
     sorted.forEach((item, index) => {
         const primaryTime = typeof item.serverTime === "number"
@@ -131,9 +175,6 @@ function buildGraph(events) {
         maxTime = Math.max(maxTime, endTime);
 
         const kindKey = LANE_LABELS[item.kind] ? item.kind : "other";
-        if (!laneIndexMap.has(kindKey)) {
-            laneIndexMap.set(kindKey, laneIndexMap.size);
-        }
         const laneIndex = laneIndexMap.get(kindKey);
 
         nodes.push({
@@ -158,7 +199,7 @@ function buildGraph(events) {
     const laneHeight = 160;
     const baseX = 160;
     const baseY = 60;
-    const travelWidth = Math.max(nodes.length * 220, 1200);
+    const travelWidth = Math.max(span > 0 ? span * 0.25 : 0, nodes.length * 240, 1200);
 
     nodes.forEach((node, index) => {
         const item = node.data;
@@ -215,7 +256,7 @@ export default function SignalGraph({ events, onClose, onNodeSelect }) {
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 px-6 py-10 backdrop-blur">
-            <div className="relative flex w-full max-w-6xl flex-col gap-6 rounded-3xl border border-white/10 bg-slate-950/95 p-8 shadow-[0_72px_160px_-80px_rgba(15,23,42,1)]">
+            <div className="relative flex w-full max-w-[min(1400px,96vw)] flex-col gap-6 rounded-3xl border border-white/10 bg-slate-950/95 p-8 shadow-[0_72px_160px_-80px_rgba(15,23,42,1)]">
                 <header className="flex flex-wrap items-start justify-between gap-4">
                     <div>
                         <div className="text-xs uppercase tracking-[0.32em] text-white/50">Signals graph</div>
