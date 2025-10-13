@@ -717,198 +717,198 @@ export default function SessionReplay({ sessionId }) {
     }
 
     return (
-        <div className="flex h-full min-h-0 flex-1 bg-slate-950 text-slate-100">
-            <PanelGroup direction="horizontal" className="flex h-full w-full">
-            <Panel
-                defaultSize={62}
-                minSize={40}
-                className="flex min-h-0 flex-col border-r border-white/10 bg-[radial-gradient(circle_at_top,_rgba(66,97,255,0.08),_transparent_55%)]"
-            >
-                <div className="relative flex-1 overflow-hidden">
-                    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(15,23,42,0.65),_transparent_75%)]" aria-hidden />
-                    <div ref={containerRef} className="relative z-10 h-full w-full overflow-hidden rounded-br-[44px]" />
-                </div>
-                <div className="border-t border-white/10 bg-slate-950/70 px-6 pb-6 pt-5 backdrop-blur">
-                    <div className="flex flex-wrap items-center gap-3">
-                        <button
-                            onClick={() => {
-                                const rep = replayerRef.current;
-                                if (!rep) return;
-
-                                if (canPause) {
-                                    const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
-                                    lastPausedTimeRef.current = now;
-                                    rep.pause();
-                                    setPlayerStatus("paused");
-                                } else if (canPlay) {
-                                    const resumeAt =
-                                        Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
-                                            ? lastPausedTimeRef.current
-                                            : (rep.getCurrentTime?.() ?? currentTime ?? 0);
-                                    rep.play(resumeAt);
-                                    setPlayerStatus("playing");
-                                }
-                            }}
-                            className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-4 py-2 text-sm font-medium shadow-[0_12px_28px_-16px_rgba(15,23,42,0.9)] transition hover:border-white/40 hover:bg-white/10"
-                        >
-                            <PrimaryIcon className="h-4 w-4" />
-                            {primaryLabel}
-                        </button>
-                        <button
-                            onClick={() => {
-                                const rep = replayerRef.current;
-                                if (!rep) return;
-                                rep.pause();
-                                lastPausedTimeRef.current = 0;
-                                rep.play(0);
-                                setPlayerStatus("playing");
-                                setCurrentTime(0);
-                            }}
-                            className="inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm text-slate-200 transition hover:border-white/30 hover:bg-white/10"
-                        >
-                            <IconRestart className="h-4 w-4" />
-                            Restart
-                        </button>
-                        <div className="ml-auto flex items-center gap-2 text-xs uppercase tracking-wide">
-                            <span
-                                className={`h-2 w-2 rounded-full ${statusChip.tone} ${statusChip.pulse ? "animate-pulse" : ""}`}
-                                aria-hidden
-                            />
-                            <span className={`font-semibold ${statusChip.text}`}>{statusChip.label}</span>
-                        </div>
+        <div className="flex h-full min-h-0 flex-1 flex-col px-10 pb-10 pt-8 text-slate-100">
+            <PanelGroup direction="horizontal" className="flex h-full min-h-0 min-w-0 w-full gap-8">
+                <Panel
+                    defaultSize={62}
+                    minSize={40}
+                    className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/85 shadow-[0_38px_120px_-72px_rgba(15,23,42,0.95)]"
+                >
+                    <div className="relative flex-1 min-h-0 overflow-hidden">
+                        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.14),_transparent_65%)]" aria-hidden />
+                        <div ref={containerRef} className="relative z-10 h-full w-full min-h-0" />
                     </div>
+                    <div className="border-t border-white/10 bg-slate-950/80 px-8 pb-8 pt-6 backdrop-blur">
+                        <div className="flex flex-wrap items-center gap-3 md:flex-nowrap">
+                            <button
+                                onClick={() => {
+                                    const rep = replayerRef.current;
+                                    if (!rep) return;
 
-                    <div className="mt-4 space-y-4">
-                        <div
-                            ref={trackRef}
-                            role="presentation"
-                            onPointerDown={handleTrackPointerDown}
-                            className="relative h-16 w-full cursor-pointer select-none"
-                        >
-                            <div className="absolute left-0 right-0 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-white/10">
-                                <div
-                                    className="h-full rounded-full bg-gradient-to-r from-sky-400 via-blue-500 to-indigo-500"
-                                    style={{ width: `${progress}%` }}
+                                    if (canPause) {
+                                        const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
+                                        lastPausedTimeRef.current = now;
+                                        rep.pause();
+                                        setPlayerStatus("paused");
+                                    } else if (canPlay) {
+                                        const resumeAt =
+                                            Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
+                                                ? lastPausedTimeRef.current
+                                                : (rep.getCurrentTime?.() ?? currentTime ?? 0);
+                                        rep.play(resumeAt);
+                                        setPlayerStatus("playing");
+                                    }
+                                }}
+                                className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-5 py-2.5 text-sm font-medium shadow-[0_16px_36px_-18px_rgba(15,23,42,0.95)] transition hover:border-white/40 hover:bg-white/10"
+                            >
+                                <PrimaryIcon className="h-4 w-4" />
+                                {primaryLabel}
+                            </button>
+                            <button
+                                onClick={() => {
+                                    const rep = replayerRef.current;
+                                    if (!rep) return;
+                                    rep.pause();
+                                    lastPausedTimeRef.current = 0;
+                                    rep.play(0);
+                                    setPlayerStatus("playing");
+                                    setCurrentTime(0);
+                                }}
+                                className="inline-flex items-center gap-2 rounded-full border border-white/10 px-5 py-2.5 text-sm text-slate-200 transition hover:border-white/30 hover:bg-white/10"
+                            >
+                                <IconRestart className="h-4 w-4" />
+                                Restart
+                            </button>
+                            <div className="order-3 flex w-full items-center justify-between gap-2 text-xs uppercase tracking-wide text-white/60 md:order-none md:w-auto md:justify-end md:pl-4">
+                                <span
+                                    className={`h-2 w-2 rounded-full ${statusChip.tone} ${statusChip.pulse ? "animate-pulse" : ""}`}
+                                    aria-hidden
                                 />
+                                <span className={`font-semibold ${statusChip.text}`}>{statusChip.label}</span>
                             </div>
+                        </div>
 
-                            {eventMarkers.map((marker) => {
-                                const relativeLabel = formatRelativeTime(
-                                    (typeof marker.event._t === "number" && marker.event._t) ??
-                                    (typeof marker.event._startServer === "number" && marker.event._startServer) ??
-                                    (typeof marker.event._endServer === "number" && marker.event._endServer) ??
-                                    null,
-                                );
-                                const isActive = marker.aligned != null && Math.abs(marker.aligned - currentTime) <= 250;
-                                const boxShadow = isActive
-                                    ? "0 0 0 2px rgba(15,23,42,0.9), 0 0 0 6px rgba(56,189,248,0.45)"
-                                    : "0 0 0 2px rgba(15,23,42,0.9)";
-
-                                return (
-                                    <button
-                                        key={marker.id}
-                                        type="button"
-                                        title={`${marker.label}${relativeLabel && relativeLabel !== "—" ? ` · ${relativeLabel}` : ""}`}
-                                        aria-label={`${marker.label}${relativeLabel && relativeLabel !== "—" ? ` at ${relativeLabel}` : ""}`}
-                                        className="absolute top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full transition-transform duration-150 hover:-translate-y-[55%] hover:scale-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
-                                        style={{
-                                            left: `${marker.percent}%`,
-                                            backgroundColor: marker.color,
-                                            boxShadow,
-                                        }}
-                                        onPointerDown={(e) => e.stopPropagation()}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            jumpToEvent(marker.event);
-                                        }}
-                                        onMouseEnter={() => setHoveredMarker(marker)}
-                                        onMouseLeave={() => {
-                                            setHoveredMarker((prev) => (prev?.id === marker.id ? null : prev));
-                                        }}
-                                        onFocus={() => setHoveredMarker(marker)}
-                                        onBlur={() => {
-                                            setHoveredMarker((prev) => (prev?.id === marker.id ? null : prev));
-                                        }}
+                        <div className="mt-6 space-y-4">
+                            <div
+                                ref={trackRef}
+                                role="presentation"
+                                onPointerDown={handleTrackPointerDown}
+                                className="relative h-20 w-full cursor-pointer select-none rounded-3xl border border-white/10 bg-slate-950/80 px-6 py-5"
+                            >
+                                <div className="absolute left-6 right-6 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-white/10">
+                                    <div
+                                        className="h-full rounded-full bg-gradient-to-r from-sky-400 via-blue-500 to-indigo-500"
+                                        style={{ width: `${progress}%` }}
                                     />
-                                );
-                            })}
+                                </div>
 
-                            {hoveredMarker && hoveredPresentation && tooltipAnchor && (
-                                <div
-                                    className="pointer-events-none absolute -top-28 z-20 w-64 rounded-2xl border border-white/10 bg-slate-950/90 p-4 shadow-[0_18px_44px_-24px_rgba(15,23,42,0.95)] backdrop-blur"
-                                    style={{
-                                        left: `${tooltipAnchor.left}%`,
-                                        transform: `translateX(${tooltipAnchor.translate})`,
-                                    }}
-                                >
-                                    <div className="flex items-start gap-3">
-                                        <span
-                                            className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5"
-                                            style={{ color: hoveredMarker.color, boxShadow: `0 18px 36px -24px ${hoveredMarker.color}AA` }}
-                                        >
-                                            <hoveredPresentation.Icon className="h-4 w-4" />
-                                        </span>
-                                        <div className="flex-1 space-y-2 text-sm text-white/80">
-                                            <div className="text-xs uppercase tracking-[0.2em] text-white/50">{hoveredPresentation.label}</div>
-                                            <div className="text-sm font-semibold text-white/90">
-                                                {hoveredEvent?.label || hoveredEvent?.actionId || hoveredEvent?.meta?.url || hoveredEvent?.meta?.subject || "Timeline event"}
-                                            </div>
-                                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-white/60">
-                                                {hoveredRelative && hoveredRelative !== "—" && <span>{hoveredRelative}</span>}
-                                                {hoveredRrwebLabel && <span>{hoveredRrwebLabel}</span>}
-                                            </div>
+                                {eventMarkers.map((marker) => {
+                                    const relativeLabel = formatRelativeTime(
+                                        (typeof marker.event._t === "number" && marker.event._t) ??
+                                        (typeof marker.event._startServer === "number" && marker.event._startServer) ??
+                                        (typeof marker.event._endServer === "number" && marker.event._endServer) ??
+                                        null,
+                                    );
+                                    const isActive = marker.aligned != null && Math.abs(marker.aligned - currentTime) <= 250;
+                                    const boxShadow = isActive
+                                        ? "0 0 0 2px rgba(15,23,42,0.95), 0 0 0 6px rgba(56,189,248,0.45)"
+                                        : "0 0 0 2px rgba(15,23,42,0.9)";
 
-                                            {hoveredEvent?.kind === "request" && hoveredEvent?.meta?.method && (
-                                                <div className="font-mono text-[11px] uppercase tracking-wider text-emerald-200">
-                                                    {hoveredEvent.meta.method}
-                                                    {hoveredEvent.meta.url && <span className="ml-2 text-white/60">{hoveredEvent.meta.url}</span>}
+                                    return (
+                                        <button
+                                            key={marker.id}
+                                            type="button"
+                                            title={`${marker.label}${relativeLabel && relativeLabel !== "—" ? ` · ${relativeLabel}` : ""}`}
+                                            aria-label={`${marker.label}${relativeLabel && relativeLabel !== "—" ? ` at ${relativeLabel}` : ""}`}
+                                            className="absolute top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full transition-transform duration-150 hover:-translate-y-[55%] hover:scale-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                                            style={{
+                                                left: `${marker.percent}%`,
+                                                backgroundColor: marker.color,
+                                                boxShadow,
+                                            }}
+                                            onPointerDown={(e) => e.stopPropagation()}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                jumpToEvent(marker.event);
+                                            }}
+                                            onMouseEnter={() => setHoveredMarker(marker)}
+                                            onMouseLeave={() => {
+                                                setHoveredMarker((prev) => (prev?.id === marker.id ? null : prev));
+                                            }}
+                                            onFocus={() => setHoveredMarker(marker)}
+                                            onBlur={() => {
+                                                setHoveredMarker((prev) => (prev?.id === marker.id ? null : prev));
+                                            }}
+                                        />
+                                    );
+                                })}
+
+                                {hoveredMarker && hoveredPresentation && tooltipAnchor && (
+                                    <div
+                                        className="pointer-events-none absolute -top-28 z-20 w-64 max-w-[18rem] rounded-2xl border border-white/10 bg-slate-950/95 p-4 shadow-[0_22px_48px_-26px_rgba(15,23,42,0.95)] backdrop-blur"
+                                        style={{
+                                            left: `${tooltipAnchor.left}%`,
+                                            transform: `translateX(${tooltipAnchor.translate})`,
+                                        }}
+                                    >
+                                        <div className="flex items-start gap-3">
+                                            <span
+                                                className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5"
+                                                style={{ color: hoveredMarker.color, boxShadow: `0 18px 36px -24px ${hoveredMarker.color}AA` }}
+                                            >
+                                                <hoveredPresentation.Icon className="h-4 w-4" />
+                                            </span>
+                                            <div className="flex-1 space-y-2 text-sm text-white/80">
+                                                <div className="text-xs uppercase tracking-[0.2em] text-white/50">{hoveredPresentation.label}</div>
+                                                <div className="text-sm font-semibold text-white/90">
+                                                    {hoveredEvent?.label || hoveredEvent?.actionId || hoveredEvent?.meta?.url || hoveredEvent?.meta?.subject || "Timeline event"}
                                                 </div>
-                                            )}
-
-                                            {hoveredEvent?.kind === "db" && hoveredEvent?.meta?.collection && (
-                                                <div className="font-mono text-[11px] uppercase tracking-wider text-amber-200">
-                                                    {hoveredEvent.meta.collection} • {hoveredEvent.meta.op}
+                                                <div className="flex flex-wrap items-center gap-2 text-[11px] text-white/60">
+                                                    {hoveredRelative && hoveredRelative !== "—" && <span>{hoveredRelative}</span>}
+                                                    {hoveredRrwebLabel && <span>{hoveredRrwebLabel}</span>}
                                                 </div>
-                                            )}
 
-                                            {hoveredEvent?.kind === "email" && hoveredEvent?.meta?.to && (
-                                                <div className="text-[11px] text-white/60">To {hoveredEvent.meta.to}</div>
-                                            )}
+                                                {hoveredEvent?.kind === "request" && hoveredEvent?.meta?.method && (
+                                                    <div className="font-mono text-[11px] uppercase tracking-wider text-emerald-200">
+                                                        {hoveredEvent.meta.method}
+                                                        {hoveredEvent.meta.url && <span className="ml-2 text-white/60">{hoveredEvent.meta.url}</span>}
+                                                    </div>
+                                                )}
+
+                                                {hoveredEvent?.kind === "db" && hoveredEvent?.meta?.collection && (
+                                                    <div className="font-mono text-[11px] uppercase tracking-wider text-amber-200">
+                                                        {hoveredEvent.meta.collection} • {hoveredEvent.meta.op}
+                                                    </div>
+                                                )}
+
+                                                {hoveredEvent?.kind === "email" && hoveredEvent?.meta?.to && (
+                                                    <div className="text-[11px] text-white/60">To {hoveredEvent.meta.to}</div>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                            )}
-                        </div>
+                                )}
+                            </div>
 
-                        <div className="flex items-center justify-between text-xs text-white/60">
-                            <span>0s</span>
-                            <span className="font-medium text-white/80">{currentSeconds.toFixed(currentSeconds >= 10 ? 0 : 1)}s</span>
-                            <span>{totalSeconds > 0 ? totalSeconds.toFixed(totalSeconds >= 10 ? 0 : 1) : "0"}s</span>
+                            <div className="flex items-center justify-between text-xs text-white/60">
+                                <span>0s</span>
+                                <span className="font-medium text-white/80">{currentSeconds.toFixed(currentSeconds >= 10 ? 0 : 1)}s</span>
+                                <span>{totalSeconds > 0 ? totalSeconds.toFixed(totalSeconds >= 10 ? 0 : 1) : "0"}s</span>
+                            </div>
                         </div>
                     </div>
-                </div>
-            </Panel>
+                </Panel>
 
-            <PanelResizeHandle className="group relative flex w-3 items-center justify-center bg-slate-950/40 transition hover:bg-slate-900/60">
-                <span className="h-full w-px rounded-full bg-white/10 transition group-hover:bg-white/30" />
-                <span className="pointer-events-none absolute inset-y-1/3 left-1/2 hidden -translate-x-1/2 flex-col items-center justify-center text-[10px] uppercase tracking-[0.3em] text-white/40 group-hover:flex">
-                    Drag
-                </span>
-            </PanelResizeHandle>
+                <PanelResizeHandle className="group relative flex w-3 items-center justify-center rounded-full bg-slate-950/40 transition hover:bg-slate-900/60">
+                    <span className="h-3/4 w-px rounded-full bg-white/10 transition group-hover:bg-white/30" />
+                    <span className="pointer-events-none absolute inset-y-1/3 left-1/2 hidden -translate-x-1/2 flex-col items-center justify-center text-[10px] uppercase tracking-[0.3em] text-white/40 group-hover:flex">
+                        Drag
+                    </span>
+                </PanelResizeHandle>
 
-            <Panel
-                defaultSize={38}
-                minSize={25}
-                className="flex min-h-0 overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(148,163,255,0.08),_transparent_55%)]"
-            >
-                <aside className="flex h-full flex-1 flex-col">
-                    <div className="flex-1 overflow-y-auto px-6 py-6">
-                        <header className="sticky top-0 z-20 flex flex-wrap items-start justify-between gap-4 rounded-3xl border border-white/10 bg-slate-950/80 px-5 py-4 backdrop-blur">
-                            <div>
-                                <div className="text-xs uppercase tracking-[0.2em] text-white/50">Session intelligence</div>
-                                <h2 className="mt-1 text-2xl font-semibold text-white">Timeline of signals</h2>
-                                <p className="mt-1 text-sm text-white/60">{highlightCopy}</p>
-                            </div>
+                <Panel
+                    defaultSize={38}
+                    minSize={25}
+                    className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/80 shadow-[0_38px_120px_-72px_rgba(15,23,42,0.95)]"
+                >
+                    <aside className="flex h-full min-h-0 flex-1 flex-col">
+                        <div className="flex-1 overflow-y-auto px-7 py-6">
+                            <header className="sticky top-0 z-20 flex flex-wrap items-start justify-between gap-4 rounded-3xl border border-white/10 bg-slate-950/80 px-5 py-4 backdrop-blur">
+                                <div>
+                                    <div className="text-xs uppercase tracking-[0.2em] text-white/50">Session intelligence</div>
+                                    <h2 className="mt-1 text-2xl font-semibold text-white">Timeline of signals</h2>
+                                    <p className="mt-1 text-sm text-white/60">{highlightCopy}</p>
+                                </div>
                             <button
                                 type="button"
                                 onClick={() => setShowAll((prev) => !prev)}
@@ -1097,9 +1097,9 @@ export default function SessionReplay({ sessionId }) {
                                 </button>
                             )}
                         </div>
-                    </div>
-                </aside>
-            </Panel>
+                        </div>
+                    </aside>
+                </Panel>
             </PanelGroup>
         </div>
     );
