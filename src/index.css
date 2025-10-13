@@ -17,3 +17,23 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.rr-player,
+.rr-controller,
+.rr-player .replayer-wrapper {
+  width: 100% !important;
+  max-width: none !important;
+}
+
+.rr-player iframe {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  display: block;
+  border: 0;
+  background-color: transparent;
+}
+
+.rr-player {
+  height: 100% !important;
+}
+

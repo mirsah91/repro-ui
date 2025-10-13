@@ -4,6 +4,7 @@ import "rrweb/dist/rrweb.min.css";
 import useTimeline from "../hooks/useTimeline";
 import { decodeBase64JsonArray } from "../lib/rrwebDecode";
 import EmailItem from "../components/EmailItem.jsx";
+import SignalGraph from "../components/SignalGraph.jsx";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 const WINDOW_MS = 1500;
@@ -270,6 +271,7 @@ export default function SessionReplay({ sessionId }) {
     const [playerStatus, setPlayerStatus] = useState("idle"); // idle | loading | ready | playing | paused | complete | no-rrweb | error
     const [showAll, setShowAll] = useState(false);
     const [hoveredMarker, setHoveredMarker] = useState(null);
+    const [isGraphOpen, setIsGraphOpen] = useState(false);
 
     const trackRef = useRef(null);
 
@@ -345,7 +347,7 @@ export default function SessionReplay({ sessionId }) {
         return null;
     }, [ticks]);
 
-    function formatRelativeTime(ms) {
+    const formatRelativeTime = useCallback((ms) => {
         if (typeof ms !== "number" || timelineAnchor == null) return "—";
         const delta = ms - timelineAnchor;
         if (!Number.isFinite(delta)) return "—";
@@ -358,16 +360,16 @@ export default function SessionReplay({ sessionId }) {
         }
         const minutes = abs / 60_000;
         return `${sign}${minutes.toFixed(minutes >= 10 ? 0 : 1)}m`;
-    }
+    }, [timelineAnchor]);
 
-    function formatActionWindow(action) {
+    const formatActionWindow = useCallback((action) => {
         if (!action) return null;
         const start = typeof action.tStart === "number" ? formatRelativeTime(action.tStart) : null;
         const end = typeof action.tEnd === "number" ? formatRelativeTime(action.tEnd) : null;
         if (!start && !end) return null;
         if (start && end) return `${start} → ${end}`;
         return start ?? end;
-    }
+    }, [formatRelativeTime]);
 
     function statusTone(status) {
         if (typeof status !== "number") return "text-slate-300";
@@ -376,7 +378,7 @@ export default function SessionReplay({ sessionId }) {
         return "text-emerald-300";
     }
 
-    function getKindPresentation(kind) {
+    const getKindPresentation = useCallback((kind) => {
         switch (kind) {
             case "action":
                 return {
@@ -409,7 +411,7 @@ export default function SessionReplay({ sessionId }) {
                     accent: "border-slate-400/40 bg-slate-500/10 text-slate-200",
                 };
         }
-    }
+    }, []);
 
     // bootstrap player once rrweb meta is ready
     useEffect(() => {
@@ -597,6 +599,62 @@ export default function SessionReplay({ sessionId }) {
             .filter(Boolean);
     }, [ticks, totalTime, serverToRrwebOffsetMs]);
 
+    const signalGraphItems = useMemo(() => {
+        if (!ticks.length) return [];
+
+        return ticks.map((ev, idx) => {
+            const presentation = getKindPresentation(ev.kind);
+            const baseTime =
+                (typeof ev._startServer === "number" && ev._startServer) ??
+                (typeof ev._t === "number" && ev._t) ??
+                (typeof ev._endServer === "number" && ev._endServer) ??
+                null;
+
+            let name = ev.label || presentation.label;
+            let detail = null;
+            if (ev.kind === "request") {
+                const method = ev.meta?.method;
+                const url = ev.meta?.url;
+                name = ev.meta?.name || url || name;
+                detail = [method, url].filter(Boolean).join(" · ");
+            } else if (ev.kind === "db") {
+                const collection = ev.meta?.collection;
+                const op = ev.meta?.op;
+                name = collection ? `${collection}${op ? ` • ${op}` : ""}` : name;
+                detail = [collection, op].filter(Boolean).join(" · ");
+            } else if (ev.kind === "email") {
+                const subject = ev.meta?.subject;
+                const to = ev.meta?.to;
+                name = subject || name;
+                detail = to ? `To ${to}` : detail;
+            } else if (ev.kind === "action") {
+                const description = ev.meta?.description;
+                name = description || name;
+            }
+
+            if (!detail && ev.actionId) {
+                detail = `Action ${ev.actionId}`;
+            }
+
+            const duration = typeof ev?.meta?.durMs === "number" ? ev.meta.durMs : null;
+
+            return {
+                id: `${ev.kind}-${ev.actionId ?? ev.id ?? idx}`,
+                event: ev,
+                kind: ev.kind ?? "other",
+                color: KIND_COLORS[ev.kind] ?? KIND_COLORS.default,
+                title: presentation.label,
+                name,
+                detail: detail || null,
+                relative: formatRelativeTime(baseTime ?? ev._startServer ?? ev._endServer ?? ev._t ?? null),
+                durationLabel: duration ? `${Math.round(duration)}ms` : null,
+                serverTime: baseTime,
+                serverStart: typeof ev._startServer === "number" ? ev._startServer : null,
+                serverEnd: typeof ev._endServer === "number" ? ev._endServer : null,
+            };
+        });
+    }, [ticks, formatRelativeTime, getKindPresentation]);
+
     const hoveredEvent = hoveredMarker?.event;
     const hoveredPresentation = hoveredEvent ? getKindPresentation(hoveredEvent.kind) : null;
     const hoveredRelative = hoveredEvent
@@ -691,8 +749,9 @@ export default function SessionReplay({ sessionId }) {
         document.addEventListener("pointerup", onUp);
     }, [seekFromClientX]);
 
-    function alignedSeekMsFor(ev) {
-        // prefer start → end → point
+    const alignedSeekMsFor = useCallback((ev) => {
+        if (!ev) return null;
+
         const serverMs =
             (typeof ev._startServer === "number" && ev._startServer) ??
             (typeof ev._endServer === "number" && ev._endServer) ??
@@ -704,19 +763,30 @@ export default function SessionReplay({ sessionId }) {
 
         const total = replayerRef.current?.getMetaData?.().totalTime ?? 0;
         return Math.max(0, Math.min(total || 0, rrMs));
-    }
+    }, [serverToRrwebOffsetMs]);
 
-    function jumpToEvent(ev) {
+    const jumpToEvent = useCallback((ev) => {
         const target = alignedSeekMsFor(ev);
         if (target == null) return;
 
         setHoveredMarker(null);
         playFromVirtualTime(target);
-    }
+    }, [alignedSeekMsFor, playFromVirtualTime]);
+
+    const handleGraphClose = useCallback(() => {
+        setIsGraphOpen(false);
+    }, []);
+
+    const handleGraphNodeSelect = useCallback((ev) => {
+        if (ev) {
+            jumpToEvent(ev);
+            setIsGraphOpen(false);
+        }
+    }, [jumpToEvent]);
 
     return (
-        <div className="flex flex-1 flex-col gap-10 pb-12 text-slate-100">
-            <section className="flex flex-col gap-6">
+        <div className="flex w-full flex-1 flex-col gap-10 pb-12 text-slate-100">
+            <section className="flex w-full flex-col gap-6">
                 <div className="relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-950/70 shadow-[0_38px_120px_-72px_rgba(15,23,42,0.95)]">
                     <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.14),_transparent_65%)]" aria-hidden />
                     <div ref={containerRef} className="relative z-10 h-[320px] w-full sm:h-[420px] lg:h-[560px]" />
@@ -777,7 +847,7 @@ export default function SessionReplay({ sessionId }) {
                             ref={trackRef}
                             role="presentation"
                             onPointerDown={handleTrackPointerDown}
-                            className="relative h-24 w-full cursor-pointer select-none rounded-3xl border border-white/10 bg-slate-950/80 px-6 py-5"
+                            className="relative h-24 w-full cursor-pointer select-none overflow-visible rounded-3xl border border-white/10 bg-slate-950/80 px-6 py-5"
                         >
                             <div className="absolute left-6 right-6 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-white/10">
                                 <div
@@ -809,6 +879,7 @@ export default function SessionReplay({ sessionId }) {
                                             left: `${marker.percent}%`,
                                             backgroundColor: marker.color,
                                             boxShadow,
+                                            zIndex: 20,
                                         }}
                                         onPointerDown={(e) => e.stopPropagation()}
                                         onClick={(e) => {
@@ -890,18 +961,33 @@ export default function SessionReplay({ sessionId }) {
                         <h2 className="mt-1 text-2xl font-semibold text-white">Timeline of signals</h2>
                         <p className="mt-1 max-w-2xl text-sm text-white/60">{highlightCopy}</p>
                     </div>
-                    <button
-                        type="button"
-                        onClick={() => setShowAll((prev) => !prev)}
-                        className={`relative inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
-                            showAll
-                                ? "border-sky-400/60 bg-sky-500/10 text-sky-200 shadow-[0_12px_30px_-18px_rgba(56,189,248,0.65)]"
-                                : "border-white/10 bg-white/5 text-white/70 hover:border-white/30 hover:bg-white/10"
-                        }`}
-                    >
-                        <span className={`inline-flex h-2.5 w-2.5 rounded-full ${showAll ? "bg-sky-300" : "bg-white/40"}`} aria-hidden />
-                        {showAll ? "Showing all events" : "Show all events"}
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setShowAll((prev) => !prev)}
+                            className={`relative inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
+                                showAll
+                                    ? "border-sky-400/60 bg-sky-500/10 text-sky-200 shadow-[0_12px_30px_-18px_rgba(56,189,248,0.65)]"
+                                    : "border-white/10 bg-white/5 text-white/70 hover:border-white/30 hover:bg-white/10"
+                            }`}
+                        >
+                            <span className={`inline-flex h-2.5 w-2.5 rounded-full ${showAll ? "bg-sky-300" : "bg-white/40"}`} aria-hidden />
+                            {showAll ? "Showing all events" : "Show all events"}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setIsGraphOpen(true)}
+                            disabled={!signalGraphItems.length}
+                            className={`inline-flex items-center gap-2 rounded-full border border-white/15 px-4 py-1.5 text-xs font-semibold text-white transition ${
+                                signalGraphItems.length
+                                    ? "bg-gradient-to-r from-sky-500/20 via-blue-500/20 to-indigo-500/20 hover:border-white/35 hover:from-sky-500/30 hover:via-blue-500/30 hover:to-indigo-500/30"
+                                    : "cursor-not-allowed bg-white/5 text-white/40"
+                            }`}
+                        >
+                            <IconSparkles className="h-3.5 w-3.5" />
+                            View signal graph
+                        </button>
+                    </div>
                 </header>
 
                 <div className="mt-6 space-y-4">
@@ -1059,6 +1145,14 @@ export default function SessionReplay({ sessionId }) {
                     )}
                 </div>
             </section>
+
+            {isGraphOpen && (
+                <SignalGraph
+                    events={signalGraphItems}
+                    onClose={handleGraphClose}
+                    onNodeSelect={handleGraphNodeSelect}
+                />
+            )}
         </div>
     );
 }
