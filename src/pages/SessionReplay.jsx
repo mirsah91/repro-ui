@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Replayer } from "rrweb";
 import "rrweb/dist/rrweb.min.css";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import useTimeline from "../hooks/useTimeline";
 import { decodeBase64JsonArray } from "../lib/rrwebDecode";
 import EmailItem from "../components/EmailItem.jsx";
@@ -11,6 +12,13 @@ const POLL_MS = 200;
 
 // rank order inside one action group
 const KIND_RANK = { action: 0, request: 1, db: 2, email: 3 };
+const KIND_COLORS = {
+    action: "#38bdf8",
+    request: "#34d399",
+    db: "#fbbf24",
+    email: "#f472b6",
+    default: "#cbd5f5",
+};
 
 const iconStroke = {
     fill: "none",
@@ -263,6 +271,9 @@ export default function SessionReplay({ sessionId }) {
     const [playerStatus, setPlayerStatus] = useState("idle"); // idle | loading | ready | no-rrweb | error
     const [showAll, setShowAll] = useState(false);
     const [expandedGroups, setExpandedGroups] = useState({});
+    const [hoveredMarker, setHoveredMarker] = useState(null);
+
+    const trackRef = useRef(null);
 
     // time alignment
     const rrwebFirstTsRef = useRef(null);   // first rrweb event.timestamp
@@ -491,6 +502,15 @@ export default function SessionReplay({ sessionId }) {
         clockOffsetRef.current = ticks[0]._t - rrwebFirstTsRef.current;
     }, [ticks]);
 
+    const serverToRrwebOffsetMs = useCallback((serverMs) => {
+        if (typeof serverMs !== "number") return null;
+        const rrFirst = rrwebFirstTsRef.current;
+        const offset = clockOffsetRef.current ?? 0; // server - rrweb
+        if (typeof rrFirst !== "number") return null;
+        const virtual = serverMs - offset - rrFirst;
+        return Number.isFinite(virtual) ? Math.max(0, virtual) : null;
+    }, []);
+
     const meta = replayerRef.current?.getMetaData?.();
     const totalTime = meta?.totalTime ?? 0;
     const progress = totalTime > 0 ? Math.min(100, (currentTime / totalTime) * 100) : 0;
@@ -508,6 +528,101 @@ export default function SessionReplay({ sessionId }) {
             ? `Highlighting events near ${highlightLabel} from the active replay position.`
             : "Highlighting events around the active replay position.";
 
+    const eventMarkers = useMemo(() => {
+        if (!totalTime || !Number.isFinite(totalTime)) return [];
+
+        return ticks
+            .map((ev, idx) => {
+                const aligned =
+                    typeof ev._alignedStart === "number"
+                        ? ev._alignedStart
+                        : typeof ev._alignedEnd === "number"
+                            ? ev._alignedEnd
+                            : serverToRrwebOffsetMs(
+                                (typeof ev._startServer === "number" && ev._startServer) ??
+                                (typeof ev._endServer === "number" && ev._endServer) ??
+                                (typeof ev._t === "number" && ev._t) ??
+                                null,
+                            );
+
+                if (aligned == null || !Number.isFinite(aligned)) return null;
+                const percent = Math.max(0, Math.min(100, (aligned / totalTime) * 100));
+                const key = `${ev.kind}-${ev.actionId ?? ev.id ?? idx}`;
+                const { label } = getKindPresentation(ev.kind);
+                const color = KIND_COLORS[ev.kind] ?? KIND_COLORS.default;
+
+                return {
+                    id: key,
+                    percent,
+                    event: ev,
+                    label,
+                    color,
+                    aligned,
+                };
+            })
+            .filter(Boolean);
+    }, [ticks, totalTime, serverToRrwebOffsetMs]);
+
+    const hoveredEvent = hoveredMarker?.event;
+    const hoveredPresentation = hoveredEvent ? getKindPresentation(hoveredEvent.kind) : null;
+    const hoveredRelative = hoveredEvent
+        ? formatRelativeTime(
+            (typeof hoveredEvent._t === "number" && hoveredEvent._t) ??
+            (typeof hoveredEvent._startServer === "number" && hoveredEvent._startServer) ??
+            (typeof hoveredEvent._endServer === "number" && hoveredEvent._endServer) ??
+            null,
+        )
+        : null;
+    const hoveredRrwebLabel =
+        hoveredMarker?.aligned != null && Number.isFinite(hoveredMarker?.aligned)
+            ? `~${Math.round(hoveredMarker.aligned)}ms replay`
+            : null;
+
+    const playFromVirtualTime = useCallback((virtualMs) => {
+        const rep = replayerRef.current;
+        if (!rep) return;
+
+        const limit = totalTime || 0;
+        const clamped = Math.max(0, Math.min(limit, Number(virtualMs) || 0));
+
+        try {
+            rep.pause();
+            lastPausedTimeRef.current = clamped;
+            rep.play(clamped);
+            setPlayerStatus("playing");
+            setCurrentTime(clamped);
+        } catch (e) {
+            console.warn("seek failed", e);
+        }
+    }, [totalTime]);
+
+    const seekFromClientX = useCallback((clientX) => {
+        const track = trackRef.current;
+        if (!track || !totalTime) return;
+
+        const rect = track.getBoundingClientRect();
+        if (!rect?.width) return;
+
+        const ratio = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
+        playFromVirtualTime(ratio * totalTime);
+    }, [playFromVirtualTime, totalTime]);
+
+    const handleTrackPointerDown = useCallback((event) => {
+        event.preventDefault();
+        setHoveredMarker(null);
+        seekFromClientX(event.clientX);
+
+        const onMove = (e) => seekFromClientX(e.clientX);
+        const onUp = (e) => {
+            seekFromClientX(e.clientX);
+            document.removeEventListener("pointermove", onMove);
+            document.removeEventListener("pointerup", onUp);
+        };
+
+        document.addEventListener("pointermove", onMove);
+        document.addEventListener("pointerup", onUp);
+    }, [seekFromClientX]);
+
     function alignedSeekMsFor(ev) {
         // prefer start → end → point
         const serverMs =
@@ -524,37 +639,20 @@ export default function SessionReplay({ sessionId }) {
     }
 
     function jumpToEvent(ev) {
-        const rep = replayerRef.current;
-        if (!rep) return;
-
         const target = alignedSeekMsFor(ev);
         if (target == null) return;
 
-        try {
-            rep.pause();
-            lastPausedTimeRef.current = target;
-            rep.play(target); // seek + play (or play+pause if you want to land paused)
-            setPlayerStatus("playing");
-            setCurrentTime(target);
-        } catch (e) {
-            console.warn("seek failed", e);
-        }
-    }
-
-    function serverToRrwebOffsetMs(serverMs) {
-        if (typeof serverMs !== "number") return null;
-        const rrFirst = rrwebFirstTsRef.current;
-        const offset  = clockOffsetRef.current ?? 0; // server - rrweb
-        if (typeof rrFirst !== "number") return null;
-        // Convert server epoch → rrweb virtual ms since start
-        const virtual = (serverMs - offset) - rrFirst;
-        return Number.isFinite(virtual) ? Math.max(0, virtual) : null;
+        setHoveredMarker(null);
+        playFromVirtualTime(target);
     }
 
     return (
-        <div className="flex h-screen bg-slate-950 text-slate-100">
-            {/* left: rrweb player */}
-            <div className="flex-1 flex flex-col border-r border-white/10 bg-[radial-gradient(circle_at_top,_rgba(66,97,255,0.08),_transparent_55%)]">
+        <PanelGroup direction="horizontal" className="h-screen bg-slate-950 text-slate-100">
+            <Panel
+                defaultSize={62}
+                minSize={40}
+                className="flex flex-col border-r border-white/10 bg-[radial-gradient(circle_at_top,_rgba(66,97,255,0.08),_transparent_55%)]"
+            >
                 <div className="relative flex-1 overflow-hidden">
                     <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(15,23,42,0.65),_transparent_75%)]" aria-hidden />
                     <div ref={containerRef} className="relative z-10 h-full w-full" />
@@ -606,31 +704,105 @@ export default function SessionReplay({ sessionId }) {
                         </div>
                     </div>
 
-                    <div className="mt-5 space-y-3">
-                        <input
-                            type="range"
-                            min={0}
-                            max={Math.max(totalTime, 0)}
-                            value={currentTime}
-                            onChange={(e) => {
-                                const rep = replayerRef.current;
-                                const newTime = Number(e.target.value);
-                                if (!rep) return;
+                    <div className="mt-5 space-y-4">
+                        <div
+                            ref={trackRef}
+                            role="presentation"
+                            onPointerDown={handleTrackPointerDown}
+                            className="relative h-16 w-full cursor-pointer select-none"
+                        >
+                            <div className="absolute left-0 right-0 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-white/10">
+                                <div
+                                    className="h-full rounded-full bg-gradient-to-r from-sky-400 via-blue-500 to-indigo-500"
+                                    style={{ width: `${progress}%` }}
+                                />
+                            </div>
 
-                                rep.pause();
-                                lastPausedTimeRef.current = newTime;
-                                rep.play(newTime);
-                                setPlayerStatus("playing");
-                                setCurrentTime(newTime);
-                            }}
-                            className="w-full accent-sky-400"
-                        />
-                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-                            <div
-                                className="h-full rounded-full bg-gradient-to-r from-sky-400 via-blue-500 to-indigo-500"
-                                style={{ width: `${progress}%` }}
-                            />
+                            {eventMarkers.map((marker) => {
+                                const relativeLabel = formatRelativeTime(
+                                    (typeof marker.event._t === "number" && marker.event._t) ??
+                                    (typeof marker.event._startServer === "number" && marker.event._startServer) ??
+                                    (typeof marker.event._endServer === "number" && marker.event._endServer) ??
+                                    null,
+                                );
+                                const isActive = marker.aligned != null && Math.abs(marker.aligned - currentTime) <= 250;
+                                const boxShadow = isActive
+                                    ? "0 0 0 2px rgba(15,23,42,0.9), 0 0 0 6px rgba(56,189,248,0.45)"
+                                    : "0 0 0 2px rgba(15,23,42,0.9)";
+
+                                return (
+                                    <button
+                                        key={marker.id}
+                                        type="button"
+                                        title={`${marker.label}${relativeLabel && relativeLabel !== "—" ? ` · ${relativeLabel}` : ""}`}
+                                        aria-label={`${marker.label}${relativeLabel && relativeLabel !== "—" ? ` at ${relativeLabel}` : ""}`}
+                                        className="absolute top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full transition-transform duration-150 hover:-translate-y-[55%] hover:scale-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                                        style={{
+                                            left: `${marker.percent}%`,
+                                            backgroundColor: marker.color,
+                                            boxShadow,
+                                        }}
+                                        onPointerDown={(e) => e.stopPropagation()}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            jumpToEvent(marker.event);
+                                        }}
+                                        onMouseEnter={() => setHoveredMarker(marker)}
+                                        onMouseLeave={() => {
+                                            setHoveredMarker((prev) => (prev?.id === marker.id ? null : prev));
+                                        }}
+                                        onFocus={() => setHoveredMarker(marker)}
+                                        onBlur={() => {
+                                            setHoveredMarker((prev) => (prev?.id === marker.id ? null : prev));
+                                        }}
+                                    />
+                                );
+                            })}
+
+                            {hoveredMarker && hoveredPresentation && (
+                                <div
+                                    className="pointer-events-none absolute -top-28 z-20 w-64 -translate-x-1/2 rounded-2xl border border-white/10 bg-slate-950/90 p-4 shadow-[0_18px_44px_-24px_rgba(15,23,42,0.95)] backdrop-blur"
+                                    style={{ left: `${hoveredMarker.percent}%` }}
+                                >
+                                    <div className="flex items-start gap-3">
+                                        <span
+                                            className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5"
+                                            style={{ color: hoveredMarker.color, boxShadow: `0 18px 36px -24px ${hoveredMarker.color}AA` }}
+                                        >
+                                            <hoveredPresentation.Icon className="h-4 w-4" />
+                                        </span>
+                                        <div className="flex-1 space-y-2 text-sm text-white/80">
+                                            <div className="text-xs uppercase tracking-[0.2em] text-white/50">{hoveredPresentation.label}</div>
+                                            <div className="text-sm font-semibold text-white/90">
+                                                {hoveredEvent?.label || hoveredEvent?.actionId || hoveredEvent?.meta?.url || hoveredEvent?.meta?.subject || "Timeline event"}
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-white/60">
+                                                {hoveredRelative && hoveredRelative !== "—" && <span>{hoveredRelative}</span>}
+                                                {hoveredRrwebLabel && <span>{hoveredRrwebLabel}</span>}
+                                            </div>
+
+                                            {hoveredEvent?.kind === "request" && hoveredEvent?.meta?.method && (
+                                                <div className="font-mono text-[11px] uppercase tracking-wider text-emerald-200">
+                                                    {hoveredEvent.meta.method}
+                                                    {hoveredEvent.meta.url && <span className="ml-2 text-white/60">{hoveredEvent.meta.url}</span>}
+                                                </div>
+                                            )}
+
+                                            {hoveredEvent?.kind === "db" && hoveredEvent?.meta?.collection && (
+                                                <div className="font-mono text-[11px] uppercase tracking-wider text-amber-200">
+                                                    {hoveredEvent.meta.collection} • {hoveredEvent.meta.op}
+                                                </div>
+                                            )}
+
+                                            {hoveredEvent?.kind === "email" && hoveredEvent?.meta?.to && (
+                                                <div className="text-[11px] text-white/60">To {hoveredEvent.meta.to}</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
+
                         <div className="flex items-center justify-between text-xs text-white/60">
                             <span>0s</span>
                             <span className="font-medium text-white/80">{currentSeconds.toFixed(currentSeconds >= 10 ? 0 : 1)}s</span>
@@ -638,194 +810,206 @@ export default function SessionReplay({ sessionId }) {
                         </div>
                     </div>
                 </div>
-            </div>
+            </Panel>
 
-            {/* right: backend sidebar */}
-            <aside className="w-[30rem] max-w-[34rem] overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(148,163,255,0.08),_transparent_55%)]">
-                <div className="flex h-full flex-col gap-6 px-6 py-6">
-                    <header className="flex flex-wrap items-start justify-between gap-4">
-                        <div>
-                            <div className="text-xs uppercase tracking-[0.2em] text-white/50">Session intelligence</div>
-                            <h2 className="mt-1 text-2xl font-semibold text-white">Timeline of signals</h2>
-                            <p className="mt-1 text-sm text-white/60">{highlightCopy}</p>
-                        </div>
-                        <label className="flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/70 transition hover:border-white/30 hover:bg-white/10">
-                            <input
-                                type="checkbox"
-                                className="accent-sky-400"
-                                checked={showAll}
-                                onChange={(e) => setShowAll(e.target.checked)}
-                            />
-                            Show all events
-                        </label>
-                    </header>
+            <PanelResizeHandle className="group relative flex w-3 items-center justify-center bg-slate-950/40 transition hover:bg-slate-900/60">
+                <span className="h-full w-px rounded-full bg-white/10 transition group-hover:bg-white/30" />
+                <span className="pointer-events-none absolute inset-y-1/3 left-1/2 hidden -translate-x-1/2 flex-col items-center justify-center text-[10px] uppercase tracking-[0.3em] text-white/40 group-hover:flex">
+                    Drag
+                </span>
+            </PanelResizeHandle>
 
-                    {playerStatus === "no-rrweb" && (
-                        <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
-                            No rrweb events (or too few to initialize) were captured for this session.
-                        </div>
-                    )}
+            <Panel
+                defaultSize={38}
+                minSize={25}
+                className="flex overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(148,163,255,0.08),_transparent_55%)]"
+            >
+                <aside className="flex h-full flex-1 flex-col">
+                    <div className="flex-1 overflow-y-auto px-6 py-6">
+                        <header className="flex flex-wrap items-start justify-between gap-4">
+                            <div>
+                                <div className="text-xs uppercase tracking-[0.2em] text-white/50">Session intelligence</div>
+                                <h2 className="mt-1 text-2xl font-semibold text-white">Timeline of signals</h2>
+                                <p className="mt-1 text-sm text-white/60">{highlightCopy}</p>
+                            </div>
+                            <label className="flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/70 transition hover:border-white/30 hover:bg-white/10">
+                                <input
+                                    type="checkbox"
+                                    className="accent-sky-400"
+                                    checked={showAll}
+                                    onChange={(e) => setShowAll(e.target.checked)}
+                                />
+                                Show all events
+                            </label>
+                        </header>
 
-                    {!ticks.length && (
-                        <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-white/70">
-                            No backend timeline data has been recorded for this session yet.
-                        </div>
-                    )}
+                        <div className="mt-6 space-y-4">
+                            {playerStatus === "no-rrweb" && (
+                                <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+                                    No rrweb events (or too few to initialize) were captured for this session.
+                                </div>
+                            )}
 
-                    <div className="space-y-4">
-                        {renderGroups.map((g, gi) => {
-                            const action = g.items.find((it) => it.kind === "action");
-                            const title = action?.label || action?.actionId || "Other events";
-                            const windowLabel = formatActionWindow(action);
-                            const isExpanded = expandedGroups[gi] ?? true;
+                            {!ticks.length && (
+                                <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-white/70">
+                                    No backend timeline data has been recorded for this session yet.
+                                </div>
+                            )}
 
-                            return (
-                                <div
-                                    key={g.id || gi}
-                                    className="rounded-3xl border border-white/10 bg-white/[0.05] p-5 shadow-[0_20px_55px_-28px_rgba(15,23,42,0.9)] backdrop-blur transition hover:border-white/20"
-                                >
-                                    <button
-                                        type="button"
-                                        onClick={() =>
-                                            setExpandedGroups((prev) => ({
-                                                ...prev,
-                                                [gi]: !(prev[gi] ?? true),
-                                            }))
-                                        }
-                                        className="flex w-full items-center justify-between gap-4 text-left"
-                                    >
-                                        <div>
-                                            <div className="text-xs uppercase tracking-[0.24em] text-white/50">Action group</div>
-                                            <div className="mt-1 text-lg font-semibold text-white">{title}</div>
-                                            {windowLabel && (
-                                                <div className="mt-1 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] text-white/60">
-                                                    <IconClock className="h-3.5 w-3.5" />
-                                                    {windowLabel}
-                                                </div>
-                                            )}
-                                        </div>
-                                        <span
-                                            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/70 transition-transform duration-200"
-                                            style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)" }}
-                                        >
-                                            <IconChevronDown className="h-4 w-4" />
-                                        </span>
-                                    </button>
+                            {renderGroups.map((g, gi) => {
+                                const action = g.items.find((it) => it.kind === "action");
+                                const title = action?.label || action?.actionId || "Other events";
+                                const windowLabel = formatActionWindow(action);
+                                const isExpanded = expandedGroups[gi] ?? true;
 
+                                return (
                                     <div
-                                        className={`overflow-hidden transition-all duration-300 ease-out ${
-                                            isExpanded
-                                                ? "pointer-events-auto mt-4 max-h-[1200px] opacity-100"
-                                                : "pointer-events-none max-h-0 opacity-0"
-                                        }`}
+                                        key={g.id || gi}
+                                        className="rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 via-white/5 to-transparent p-5 shadow-[0_32px_80px_-48px_rgba(15,23,42,1)]"
                                     >
-                                        <div className="space-y-3 py-1">
-                                            {g.items.map((e, i) => {
-                                                const aligned = toRrwebTime(e._t);
-                                                const { label, Icon, accent } = getKindPresentation(e.kind);
-                                                const relative = formatRelativeTime(e._t ?? e._startServer ?? e._endServer);
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setExpandedGroups((prev) => ({
+                                                    ...prev,
+                                                    [gi]: !isExpanded,
+                                                }));
+                                            }}
+                                            className="flex w-full items-center justify-between gap-4 text-left"
+                                        >
+                                            <div>
+                                                <div className="text-xs uppercase tracking-[0.24em] text-white/50">Action group</div>
+                                                <div className="mt-1 text-lg font-semibold text-white">{title}</div>
+                                                {windowLabel && (
+                                                    <div className="mt-1 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] text-white/60">
+                                                        <IconClock className="h-3.5 w-3.5" />
+                                                        {windowLabel}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <span
+                                                className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/70 transition-transform duration-200"
+                                                style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)" }}
+                                            >
+                                                <IconChevronDown className="h-4 w-4" />
+                                            </span>
+                                        </button>
 
-                                                return (
-                                                    <button
-                                                        key={i}
-                                                        type="button"
-                                                        onClick={() => jumpToEvent(e)}
-                                                        className="group flex w-full items-start gap-4 rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-4 text-left shadow-[0_18px_40px_-24px_rgba(15,23,42,0.95)] transition duration-200 hover:-translate-y-0.5 hover:border-white/30 hover:bg-slate-900/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60"
-                                                    >
-                                                        <span className={`mt-1 flex h-10 w-10 items-center justify-center rounded-full border ${accent}`}>
-                                                            <Icon className="h-4 w-4" />
-                                                        </span>
-                                                        <div className="flex-1 space-y-2">
-                                                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs uppercase tracking-[0.18em] text-white/50">
-                                                                <span>{label}</span>
-                                                                {relative !== "—" && (
-                                                                    <span className="flex items-center gap-2 text-[11px] normal-case text-white/60">
-                                                                        <span className="h-1.5 w-1.5 rounded-full bg-white/30" />
-                                                                        {relative}
-                                                                    </span>
-                                                                )}
-                                                                {typeof aligned === "number" && (
-                                                                    <span className="text-[11px] normal-case text-white/40">
-                                                                        ~{Math.round(aligned)}ms rrweb
-                                                                    </span>
-                                                                )}
-                                                            </div>
+                                        <div
+                                            className={`overflow-hidden transition-all duration-300 ease-out ${
+                                                isExpanded
+                                                    ? "pointer-events-auto mt-4 max-h-[1200px] opacity-100"
+                                                    : "pointer-events-none max-h-0 opacity-0"
+                                            }`}
+                                        >
+                                            <div className="space-y-3 py-1">
+                                                {g.items.map((e, i) => {
+                                                    const aligned = toRrwebTime(e._t);
+                                                    const { label, Icon, accent } = getKindPresentation(e.kind);
+                                                    const relative = formatRelativeTime(e._t ?? e._startServer ?? e._endServer);
 
-                                                            {e.kind === "request" && (
-                                                                <div className="space-y-1 text-sm text-white/80">
-                                                                    <div className="font-mono text-[12px] uppercase tracking-wider text-emerald-200">
-                                                                        {e.meta?.method}
-                                                                        <span className="ml-2 text-white/60">{e.meta?.url}</span>
+                                                    return (
+                                                        <button
+                                                            key={i}
+                                                            type="button"
+                                                            onClick={() => jumpToEvent(e)}
+                                                            className="group flex w-full items-start gap-4 rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-4 text-left shadow-[0_18px_40px_-24px_rgba(15,23,42,0.95)] transition duration-200 hover:-translate-y-0.5 hover:border-white/30 hover:bg-slate-900/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60"
+                                                        >
+                                                            <span className={`mt-1 flex h-10 w-10 items-center justify-center rounded-full border ${accent}`}>
+                                                                <Icon className="h-4 w-4" />
+                                                            </span>
+                                                            <div className="flex-1 space-y-2">
+                                                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs uppercase tracking-[0.18em] text-white/50">
+                                                                    <span>{label}</span>
+                                                                    {relative !== "—" && (
+                                                                        <span className="flex items-center gap-2 text-[11px] normal-case text-white/60">
+                                                                            <span className="h-1.5 w-1.5 rounded-full bg-white/30" />
+                                                                            {relative}
+                                                                        </span>
+                                                                    )}
+                                                                    {typeof aligned === "number" && (
+                                                                        <span className="text-[11px] normal-case text-white/40">
+                                                                            ~{Math.round(aligned)}ms rrweb
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+
+                                                                {e.kind === "request" && (
+                                                                    <div className="space-y-1 text-sm text-white/80">
+                                                                        <div className="font-mono text-[12px] uppercase tracking-wider text-emerald-200">
+                                                                            {e.meta?.method}
+                                                                            <span className="ml-2 text-white/60">{e.meta?.url}</span>
+                                                                        </div>
+                                                                        <div className="flex flex-wrap items-center gap-3 text-[12px] text-white/60">
+                                                                            <span className={statusTone(e.meta?.status)}>Status {e.meta?.status ?? "—"}</span>
+                                                                            {typeof e.meta?.durMs === "number" && (
+                                                                                <span>Duration {e.meta.durMs}ms</span>
+                                                                            )}
+                                                                        </div>
                                                                     </div>
-                                                                    <div className="flex flex-wrap items-center gap-3 text-[12px] text-white/60">
-                                                                        <span className={statusTone(e.meta?.status)}>Status {e.meta?.status ?? "—"}</span>
-                                                                        {typeof e.meta?.durMs === "number" && (
-                                                                            <span>Duration {e.meta.durMs}ms</span>
+                                                                )}
+
+                                                                {e.kind === "db" && (
+                                                                    <div className="space-y-2 text-sm text-white/80">
+                                                                        <div className="font-mono text-xs uppercase tracking-wider text-amber-200">
+                                                                            {e.meta?.collection} • {e.meta?.op}
+                                                                        </div>
+                                                                        {e.meta?.query && (
+                                                                            <pre className="max-h-40 overflow-auto rounded-xl border border-white/5 bg-slate-900/80 p-3 text-[11px] leading-relaxed text-white/70">
+                                                                                {JSON.stringify(e.meta.query, null, 2)}
+                                                                            </pre>
+                                                                        )}
+                                                                        {e.meta?.resultMeta && (
+                                                                            <div className="text-xs text-white/50">
+                                                                                Result {JSON.stringify(e.meta.resultMeta)}
+                                                                            </div>
                                                                         )}
                                                                     </div>
-                                                                </div>
-                                                            )}
+                                                                )}
 
-                                                            {e.kind === "db" && (
-                                                                <div className="space-y-2 text-sm text-white/80">
-                                                                    <div className="font-mono text-xs uppercase tracking-wider text-amber-200">
-                                                                        {e.meta?.collection} • {e.meta?.op}
+                                                                {e.kind === "action" && (
+                                                                    <div className="space-y-1 text-sm text-white/80">
+                                                                        <div className="font-semibold text-white/90">{e.label || e.actionId}</div>
+                                                                        {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
+                                                                            <div className="text-xs text-white/50">[{formatRelativeTime(e.tStart)} → {formatRelativeTime(e.tEnd)}]</div>
+                                                                        )}
                                                                     </div>
-                                                                    {e.meta?.query && (
-                                                                        <pre className="max-h-40 overflow-auto rounded-xl border border-white/5 bg-slate-900/80 p-3 text-[11px] leading-relaxed text-white/70">
-                                                                            {JSON.stringify(e.meta.query, null, 2)}
-                                                                        </pre>
-                                                                    )}
-                                                                    {e.meta?.resultMeta && (
-                                                                        <div className="text-xs text-white/50">
-                                                                            Result {JSON.stringify(e.meta.resultMeta)}
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                            )}
+                                                                )}
 
-                                                            {e.kind === "action" && (
-                                                                <div className="space-y-1 text-sm text-white/80">
-                                                                    <div className="font-semibold text-white/90">{e.label || e.actionId}</div>
-                                                                    {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
-                                                                        <div className="text-xs text-white/50">[{formatRelativeTime(e.tStart)} → {formatRelativeTime(e.tEnd)}]</div>
-                                                                    )}
-                                                                </div>
-                                                            )}
+                                                                {e.kind === "email" && (
+                                                                    <div className="text-sm text-white/80">
+                                                                        <EmailItem meta={e.meta} />
+                                                                    </div>
+                                                                )}
 
-                                                            {e.kind === "email" && (
-                                                                <div className="text-sm text-white/80">
-                                                                    <EmailItem meta={e.meta} />
-                                                                </div>
-                                                            )}
-
-                                                            {!["request", "db", "action", "email"].includes(e.kind) && (
-                                                                <div className="text-sm text-white/80">
-                                                                    <pre className="text-[11px] text-white/60">{JSON.stringify(e, null, 2)}</pre>
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    </button>
-                                                );
-                                            })}
+                                                                {!['request', 'db', 'action', 'email'].includes(e.kind) && (
+                                                                    <div className="text-sm text-white/80">
+                                                                        <pre className="text-[11px] text-white/60">{JSON.stringify(e, null, 2)}</pre>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                            );
-                        })}
+                                );
+                            })}
 
-                        {!renderGroups.length && !showAll && (
-                            <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-5 text-sm text-white/70">
-                                No events near the current replay moment. You can
-                                <button className="ml-1 underline" onClick={() => setShowAll(true)}>
-                                    show the entire stream
-                                </button>
-                                .
-                            </div>
-                        )}
+                            {!renderGroups.length && !showAll && (
+                                <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-5 text-sm text-white/70">
+                                    No events near the current replay moment. You can
+                                    <button className="ml-1 underline" onClick={() => setShowAll(true)}>
+                                        show the entire stream
+                                    </button>
+                                    .
+                                </div>
+                            )}
+                        </div>
                     </div>
-                </div>
-            </aside>
-        </div>
+                </aside>
+            </Panel>
+        </PanelGroup>
     );
 }
