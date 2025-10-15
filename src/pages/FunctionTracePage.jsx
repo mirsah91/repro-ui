@@ -1,9 +1,10 @@
 import { useMemo } from "react";
 import { FunctionTraceViewer } from "../components/FunctionTracerViewer.jsx";
 
+const traceData = [];
 
 export default function FunctionTracePage() {
-  const trace = useMemo(() => [], []);
+  const trace = useMemo(() => traceData, []);
 
   return (
     <div

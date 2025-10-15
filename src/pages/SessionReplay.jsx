@@ -4,6 +4,7 @@ import "rrweb/dist/rrweb.min.css";
 import useTimeline from "../hooks/useTimeline";
 import { decodeBase64JsonArray } from "../lib/rrwebDecode";
 import EmailItem from "../components/EmailItem.jsx";
+import '../components/SessionReply.css'
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 const WINDOW_MS = 1500;
@@ -174,70 +175,76 @@ export default function SessionReplay({ sessionId }) {
         return size;
     }, [measureContainerSize]);
 
-    // ---- robust iframe finding & syncing ----
+    // ---- iframe helpers (contain scaling) ----
     const findIframe = React.useCallback(() => {
         const root = containerRef.current;
         if (!root) return null;
-        // rrweb may wrap with different classnames across versions; just find any iframe inside.
-        const iframe = root.querySelector("iframe");
-        return iframe || null;
+        return root.querySelector("iframe");
     }, []);
 
-    const syncIframe = React.useCallback((size, tag = "sync") => {
+    const measureIframeContentSize = React.useCallback(() => {
         const iframe = findIframe();
-        if (!iframe) {
-            warn(`${tag}: iframe not found (will retry)`);
-            // retry a few times over the next frames — iframe often appears 1–2 RAFs after init
-            let attempts = 0;
-            const tryAgain = () => {
-                const ifr = findIframe();
-                attempts++;
-                if (ifr) {
-                    ifr.style.width = `${size.width}px`;
-                    ifr.style.height = `${size.height}px`;
-                    ifr.setAttribute("width", String(size.width));
-                    ifr.setAttribute("height", String(size.height));
-                    log(`${tag}: iframe found on retry ${attempts}`, {
-                        calc: size,
-                        iframeClient: { w: ifr.clientWidth, h: ifr.clientHeight },
-                    });
-                    return;
-                }
-                if (attempts < 8) requestAnimationFrame(tryAgain);
-                else warn(`${tag}: iframe still missing after retries`);
-            };
-            requestAnimationFrame(tryAgain);
-            return;
+        if (!iframe) return null;
+        try {
+            const doc = iframe.contentDocument || iframe.contentWindow?.document;
+            if (!doc) return null;
+            const de = doc.documentElement;
+            const body = doc.body;
+            const innerW = iframe.contentWindow?.innerWidth || 0;
+            const innerH = iframe.contentWindow?.innerHeight || 0;
+            const clientW = Math.max(de?.clientWidth || 0, body?.clientWidth || 0);
+            const clientH = Math.max(de?.clientHeight || 0, body?.clientHeight || 0);
+            const scrollW = Math.max(de?.scrollWidth || 0, body?.scrollWidth || 0);
+            const scrollH = Math.max(de?.scrollHeight || 0, body?.scrollHeight || 0);
+
+            const w = innerW || clientW || scrollW || 0;
+            const h = innerH || clientH || scrollH || 0;
+
+            const size = { width: Math.round(w), height: Math.round(h) };
+            log("measureIframeContentSize", { innerW, innerH, clientW, clientH, scrollW, scrollH, pick: size });
+            return size.width && size.height ? size : null;
+        } catch (e) {
+            warn("measureIframeContentSize failed", e);
+            return null;
         }
-        // set both style and attributes
-        iframe.style.width = `${size.width}px`;
-        iframe.style.height = `${size.height}px`;
-        iframe.setAttribute("width", String(size.width));
-        iframe.setAttribute("height", String(size.height));
-        const dump = {
-            calc: size,
-            iframeClient: { w: iframe.clientWidth, h: iframe.clientHeight },
-            iframeAttrs: { width: iframe.getAttribute("width"), height: iframe.getAttribute("height") },
-        };
-        log(`${tag}: synced iframe`, dump);
     }, [findIframe]);
 
-    // Observe iframe insertion once, right after init
-    const setupIframeObserver = React.useCallback((size) => {
+    const applyFitContain = React.useCallback((tag = "fit") => {
+        const cont = measureContainerSize();
+        const intrinsic = measureIframeContentSize();
+        const iframe = findIframe();
+        if (!cont || !intrinsic || !iframe) {
+            warn(`${tag}: missing sizes`, { cont, intrinsic, hasIframe: !!iframe });
+            return;
+        }
+
+        const scale = Math.min(cont.width / intrinsic.width, cont.height / intrinsic.height, 1); // cap at 1 (no upscale)
+        const scaledW = Math.round(intrinsic.width * scale);
+        const scaledH = Math.round(intrinsic.height * scale);
+
+        // iframe intrinsic size + scale
+        iframe.style.width = `${intrinsic.width}px`;
+        iframe.style.height = `${intrinsic.height}px`;
+        iframe.setAttribute("width", String(intrinsic.width));
+        iframe.setAttribute("height", String(intrinsic.height));
+        iframe.style.transform = `scale(${scale})`;
+        iframe.style.transformOrigin = "top left";
+        iframe.style.display = "block";
+
+        // reserve scaled space on wrapper (rrweb root parent of iframe)
+        const wrapper = iframe.parentElement;
+        if (wrapper) {
+            wrapper.style.width = `${scaledW}px`;
+            wrapper.style.height = `${scaledH}px`;
+            wrapper.style.overflow = "hidden";
+        }
+
+        // container should hide overflow as well
         const root = containerRef.current;
-        if (!root) return () => {};
-        const mo = new MutationObserver(() => {
-            const iframe = findIframe();
-            if (iframe) {
-                log("MutationObserver: iframe appeared");
-                syncIframe(size, "mo-sync");
-                // optional: disconnect after first sync
-                mo.disconnect();
-            }
-        });
-        mo.observe(root, { childList: true, subtree: true });
-        return () => mo.disconnect();
-    }, [findIframe, syncIframe]);
+        if (root) root.style.overflow = "hidden";
+
+        log(`${tag}: applyFitContain`, { container: cont, intrinsic, scale, scaled: { w: scaledW, h: scaledH } });
+    }, [findIframe, measureContainerSize, measureIframeContentSize]);
 
     // ---- alignment helpers ----
     const serverToRrwebOffsetMs = React.useCallback((serverMs) => {
@@ -301,7 +308,9 @@ export default function SessionReplay({ sessionId }) {
         if (status !== "ready" || !containerRef.current || replayerRef.current) return;
 
         let cancelled = false;
-        let disconnectMO = null;
+        let mo = null;
+        let viewportProbe = null;
+        let mismatchSentinel = null;
 
         (async () => {
             try {
@@ -339,11 +348,18 @@ export default function SessionReplay({ sessionId }) {
                 replayerRef.current = rep;
                 lastPlayerSizeRef.current = { ...measured };
 
-                // Watch for iframe insertion and sync immediately
-                disconnectMO = setupIframeObserver(measured);
+                // Observe iframe insertion -> first fit
+                mo = new MutationObserver(() => {
+                    const iframe = findIframe();
+                    if (iframe) {
+                        log("MutationObserver: iframe appeared");
+                        requestAnimationFrame(() => applyFitContain("init-fit"));
+                    }
+                });
+                mo.observe(containerRef.current, { childList: true, subtree: true });
 
-                // Also try to sync now (in case iframe is already there later this tick)
-                requestAnimationFrame(() => syncIframe(measured, "init-rAF"));
+                // Also try a frame later
+                requestAnimationFrame(() => applyFitContain("init-rAF-fit"));
 
                 rep.play();
                 setPlayerStatus("playing");
@@ -353,9 +369,7 @@ export default function SessionReplay({ sessionId }) {
                     try {
                         const t = replayerRef.current?.getCurrentTime?.() ?? 0;
                         setCurrentTime(t);
-                    } catch (err) {
-                        warn("poll current time failed", err);
-                    }
+                    } catch (err) { warn("poll current time failed", err); }
                 }, POLL_MS);
 
                 // read meta
@@ -381,18 +395,26 @@ export default function SessionReplay({ sessionId }) {
                     }
                 })();
 
-                // mismatch sentinel
-                const mismatchSentinel = window.setInterval(() => {
+                // mismatch logger (debug)
+                mismatchSentinel = window.setInterval(() => {
                     const iframe = findIframe();
                     if (!iframe) return;
-                    const calc = lastPlayerSizeRef.current;
-                    const iW = iframe.clientWidth, iH = iframe.clientHeight;
-                    if (calc.width !== iW || calc.height !== iH) {
-                        warn("SIZE MISMATCH!", { calc, iframeClient: { w: iW, h: iH } });
+                    const cont = measureContainerSize();
+                    const intrinsic = measureIframeContentSize();
+                    if (!cont || !intrinsic) return;
+                    const scale = Math.min(cont.width / intrinsic.width, cont.height / intrinsic.height, 1);
+                    const rect = iframe.getBoundingClientRect();
+                    if (scale < 1 && (rect.width > cont.width + 1 || rect.height > cont.height + 1)) {
+                        warn("SIZE MISMATCH (should fit but overflows)", { cont, intrinsic, scale, iframeRect: { w: rect.width, h: rect.height } });
                     }
-                }, 1000);
+                }, 1500);
 
-                return () => { window.clearInterval(interval); window.clearInterval(mismatchSentinel); };
+                // probe viewport periodically (if rrweb resizes its internal viewport)
+                viewportProbe = window.setInterval(() => applyFitContain("probe-fit"), 1500);
+
+                return () => {
+                    window.clearInterval(interval);
+                };
             } catch (e) {
                 warn("replay bootstrap error", e);
                 setPlayerStatus("error");
@@ -403,17 +425,34 @@ export default function SessionReplay({ sessionId }) {
             cancelled = true;
             try { replayerRef.current?.pause(); } catch {}
             replayerRef.current = null;
-            if (disconnectMO) disconnectMO();
+            if (mo) mo.disconnect();
+            if (viewportProbe) clearInterval(viewportProbe);
+            if (mismatchSentinel) clearInterval(mismatchSentinel);
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [status]);
 
-    // keep offset if ticks later
+    // recompute offset if ticks later
     useEffect(() => {
         if (!rrwebFirstTsRef.current || !ticks.length) return;
         clockOffsetRef.current = ticks[0]._t - rrwebFirstTsRef.current;
         log("recomputed offset", clockOffsetRef.current);
     }, [ticks]);
+
+    // container resize → refit (contain)
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container || typeof ResizeObserver === "undefined") {
+            applyFitContain("noRO-fit");
+            return;
+        }
+        const observer = new ResizeObserver(() => {
+            applyFitContain("RO-fit");
+        });
+        observer.observe(container);
+        applyFitContain("RO-initial-fit");
+        return () => observer.disconnect();
+    }, [applyFitContain]);
 
     const isPlaying = playerStatus === "playing";
     const canPlay = playerStatus !== "playing" && playerStatus !== "error" && playerStatus !== "loading";
@@ -444,115 +483,6 @@ export default function SessionReplay({ sessionId }) {
         });
     }, [timelineMarkers]);
 
-    const updatePlayerSize = React.useCallback((tag = "manual") => {
-        const rep = replayerRef.current;
-        if (!rep) return;
-        const size = measureContainerSize();
-        if (!size) return;
-
-        const lastSize = lastPlayerSizeRef.current;
-        if (lastSize.width === size.width && lastSize.height === size.height) {
-            log(`${tag}: size unchanged`, size);
-            return;
-        }
-
-        lastPlayerSizeRef.current = size;
-        try {
-            rep.setConfig?.({ width: size.width, height: size.height });
-            log(`${tag}: setConfig`, size);
-            syncIframe(size, `${tag}:sync`);
-        } catch (err) {
-            warn(`${tag}: setConfig failed`, err);
-        }
-    }, [measureContainerSize, syncIframe]);
-
-    // Resize observer
-    useEffect(() => {
-        const container = containerRef.current;
-        if (!container || typeof ResizeObserver === "undefined") {
-            updatePlayerSize("noRO");
-            return;
-        }
-        const observer = new ResizeObserver((entries) => {
-            if (!entries.length) { updatePlayerSize("RO-empty"); return; }
-            const entry = entries[0];
-            const boxSize = Array.isArray(entry.contentBoxSize) ? entry.contentBoxSize[0] : entry.contentBoxSize;
-            const width = boxSize?.inlineSize || entry.contentRect?.width;
-            const height = boxSize?.blockSize || entry.contentRect?.height;
-            if (width && height) {
-                const rounded = { width: Math.round(width), height: Math.round(height) };
-                const lastSize = lastPlayerSizeRef.current;
-                if (lastSize.width !== rounded.width || lastSize.height !== rounded.height) {
-                    lastPlayerSizeRef.current = rounded;
-                    try {
-                        replayerRef.current?.setConfig?.({ width: rounded.width, height: rounded.height });
-                        log("RO:setConfig", rounded);
-                        syncIframe(rounded, "RO:sync");
-                    } catch (err) { warn("RO:setConfig failed", err); }
-                } else {
-                    log("RO:same size", rounded);
-                }
-            } else {
-                updatePlayerSize("RO-fallback");
-            }
-        });
-        observer.observe(container);
-        updatePlayerSize("RO-initial");
-        return () => observer.disconnect();
-    }, [updatePlayerSize, syncIframe]);
-
-    // --------------- UI ---------------
-    const hoverPosition = hoveredMarker ? Math.min(92, Math.max(8, hoveredMarker.position * 100)) : 0;
-
-    const KIND_COLORS = {
-        action: "bg-amber-400",
-        request: "bg-sky-500",
-        db: "bg-emerald-400",
-        email: "bg-fuchsia-400",
-    };
-
-    const KIND_ICON_COMPONENTS = {
-        action: (props) => (
-            <svg viewBox="0 0 20 20" fill="currentColor" {...props}>
-                <path d="M11.3 1.046a.75.75 0 0 1 1.39.408l-.062 5.421 3.318-.002a.75.75 0 0 1 .581 1.225l-7.5 9a.75.75 0 0 1-1.32-.485l.062-5.421-3.318.002a.75.75 0 0 1-.58-1.225l7.5-9Z" />
-            </svg>
-        ),
-        request: (props) => (
-            <svg viewBox="0 0 20 20" fill="currentColor" {...props}>
-                <path
-                    fillRule="evenodd"
-                    d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm6.32-6a6.52 6.52 0 0 1-2.57 3.605c.266-.988.417-2.183.437-3.605Zm-9.75 3.605A6.52 6.52 0 0 1 3.68 12h3.133c.02 1.422.17 2.617.437 3.605Zm-.437-5.105H3.68a6.52 6.52 0 0 1 2.57-3.605c-.267.988-.417 2.183-.437 3.605Zm6.065 0H7.802c.02-1.603.207-2.948.482-3.863.3-.994.635-1.137.716-1.137.082 0 .416.143.716 1.137.275.915.463 2.26.482 3.863Zm1.568 0c-.02-1.422-.17-2.617-.437-3.605a6.52 6.52 0 0 1 2.57 3.605h-2.133Zm-3.633 1.5c-.02 1.603-.207 2.948-.482 3.863-.3.994-.635 1.137-.716 1.137-.082 0-.416-.143-.716-1.137-.275-.915-.463-2.26-.482-3.863Zm1.568 0h3.133a6.52 6.52 0 0 1-2.57 3.605c.267-.988.417-2.183.437-3.605Z"
-                    clipRule="evenodd"
-                />
-            </svg>
-        ),
-        db: (props) => (
-            <svg viewBox="0 0 20 20" fill="currentColor" {...props}>
-                <path d="M4 5c0-1.657 2.686-3 6-3s6 1.343 6 3v10c0 1.657-2.686 3-6 3s-6-1.343-6-3V5Z" />
-                <path d="M4 9.5C4 10.881 6.686 12 10 12s6-1.119 6-2.5v-1C16 9.881 13.314 11 10 11s-6-1.119-6-2.5v1Z" />
-                <path d="M4 14c0 1.381 2.686 2.5 6 2.5s6-1.119 6-2.5v1c0 1.381-2.686 2.5-6 2.5s-6-1.119-6-2.5v-1Z" />
-            </svg>
-        ),
-        email: (props) => (
-            <svg viewBox="0 0 20 20" fill="currentColor" {...props}>
-                <path d="M2.5 5.5A2.5 2.5 0 0 1 5 3h10a2.5 2.5 0 0 1 2.5 2.5v9a2.5 2.5 0 0 1-2.5 2.5H5A2.5 2.5 0 0 1 2.5 14.5v-9Z" />
-                <path
-                    d="m4.04 5.21 4.908 3.677a1.5 1.5 0 0 0 1.804 0L15.66 5.21A1 1 0 0 0 15 5H5a1 1 0 0 0-.96.21Z"
-                />
-            </svg>
-        ),
-        default: (props) => (
-            <svg viewBox="0 0 20 20" fill="currentColor" {...props}>
-                <circle cx="10" cy="10" r="5" />
-            </svg>
-        ),
-    };
-
-    function MarkerIcon({ kind, className }) {
-        const Icon = KIND_ICON_COMPONENTS[kind] || KIND_ICON_COMPONENTS.default;
-        return <Icon className={className} aria-hidden="true" />;
-    }
-
     function alignedSeekMsFor(ev) {
         const serverMs =
             (typeof ev._startServer === "number" && ev._startServer) ??
@@ -569,7 +499,6 @@ export default function SessionReplay({ sessionId }) {
         if (!rep) return;
         const target = alignedSeekMsFor(ev);
         if (target == null) return;
-
         try {
             rep.pause();
             lastPausedTimeRef.current = target;
@@ -577,7 +506,6 @@ export default function SessionReplay({ sessionId }) {
             setPlayerStatus("playing");
             setCurrentTime(target);
         } catch (e) { warn("seek failed", e); }
-
         const key = ev.__key;
         if (key) {
             setActiveEventId(key);
@@ -643,6 +571,52 @@ export default function SessionReplay({ sessionId }) {
     };
     const formatMaybeTime = (ms) => (ms == null ? "—" : formatTime(ms));
 
+    const hoverPosition = hoveredMarker ? Math.min(92, Math.max(8, hoveredMarker.position * 100)) : 0;
+
+    const KIND_COLORS = {
+        action: "bg-amber-400",
+        request: "bg-sky-500",
+        db: "bg-emerald-400",
+        email: "bg-fuchsia-400",
+    };
+
+    const KIND_ICON_COMPONENTS = {
+        action: (props) => (
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" {...props}>
+                <path d="M5 3l10 7-10 7V3z" />
+            </svg>
+        ),
+        request: (props) => (
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" {...props}>
+                <circle cx="10" cy="10" r="8" />
+                <path d="M10 6v4l2 2" />
+            </svg>
+        ),
+        db: (props) => (
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" {...props}>
+                <ellipse cx="10" cy="4" rx="6" ry="2" />
+                <path d="M4 4v12c0 1.1 2.7 2 6 2s6-.9 6-2V4" />
+                <path d="M4 10c0 1.1 2.7 2 6 2s6-.9 6-2" />
+            </svg>
+        ),
+        email: (props) => (
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" {...props}>
+                <rect x="3" y="5" width="14" height="10" rx="2" />
+                <path d="M3 6l7 5 7-5" />
+            </svg>
+        ),
+        default: (props) => (
+            <svg viewBox="0 0 20 20" fill="currentColor" {...props}>
+                <circle cx="10" cy="10" r="4" />
+            </svg>
+        ),
+    };
+
+    function MarkerIcon({ kind, className }) {
+        const Icon = KIND_ICON_COMPONENTS[kind] || KIND_ICON_COMPONENTS.default;
+        return <Icon className={`h-4 w-4 ${className}`} />;
+    }
+
     return (
         <div className="h-screen w-full overflow-hidden bg-slate-950 text-slate-100">
             <div className="grid h-full w-full grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
@@ -706,9 +680,10 @@ export default function SessionReplay({ sessionId }) {
                                         lastPausedTimeRef.current = now;
                                         rep.pause();
                                         setPlayerStatus("paused");
-                                    } else if (canPlay) {
-                                        const resumeAt = Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
-                                            ? lastPausedTimeRef.current : (rep.getCurrentTime?.() ?? currentTime ?? 0);
+                                    } else if (playerStatus !== "error" && playerStatus !== "loading") {
+                                        const resumeAt =
+                                            Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
+                                                ? lastPausedTimeRef.current : (rep.getCurrentTime?.() ?? currentTime ?? 0);
                                         rep.play(resumeAt);
                                         setPlayerStatus("playing");
                                     }
@@ -736,78 +711,64 @@ export default function SessionReplay({ sessionId }) {
                             </button>
                             <button
                                 type="button"
-                                onClick={() => updatePlayerSize("manual-click")}
+                                onClick={() => applyFitContain("manual-fit")}
                                 className="ml-2 inline-flex items-center gap-2 rounded-full border border-slate-800/60 bg-slate-900 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-400"
                             >
-                                Resize Now (log)
+                                Refit Now (log)
                             </button>
                             <div className="ml-auto text-xs text-slate-400">
                                 {playerStatus === "paused" ? "paused" : "live"}
                             </div>
                         </div>
 
+                        {/* Timeline (markers above input; input Z lower so markers are clickable) */}
                         <div className="relative h-20">
-                            {hoveredMarker && (
-                                <div
-                                    className="pointer-events-none absolute z-30 -translate-x-1/2 rounded-xl border border-slate-900/60 bg-slate-950/95 px-3 py-2 text-xs text-slate-200 shadow-2xl backdrop-blur"
-                                    style={{ left: `${hoverPosition}%`, bottom: "calc(50% + 24px)" }}
-                                >
-                                    <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.25em] text-slate-500">
-                                        <span className={`h-2 w-2 rounded-full ${KIND_COLORS[hoveredMarker.event.kind] || "bg-slate-500"}`} />
-                                        {hoveredMarker.event.kind}
-                                    </div>
-                                    <div className="mt-1 text-sm font-medium leading-snug text-slate-100 break-words">
-                                        {getMarkerTitle(hoveredMarker.event)}
-                                    </div>
-                                    {getMarkerMeta(hoveredMarker.event) && (
-                                        <div className="mt-1 text-[11px] uppercase tracking-[0.3em] text-slate-500">
-                                            {getMarkerMeta(hoveredMarker.event)}
-                                        </div>
-                                    )}
-                                    <div className="mt-1 text-[11px] text-slate-500">
-                                        {formatMaybeTime(alignedSeekMsFor(hoveredMarker.event))} rrweb • @{hoveredMarker.event._t ?? "—"}
-                                    </div>
-                                </div>
-                            )}
-
+                            {/* Track + progress */}
                             <div className="absolute inset-x-0 top-1/2 -translate-y-1/2">
                                 <div className="relative h-2 w-full rounded-full bg-slate-800/80">
                                     <div
                                         className="absolute inset-y-0 left-0 rounded-full bg-sky-500/70"
                                         style={{ width: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%` }}
                                     />
-
-                                    <div className="pointer-events-none absolute inset-0 z-40">
-                                        {timelineMarkers.map((marker) => {
-                                            const event = marker.event;
-                                            const isActive = activeEventId && event.__key === activeEventId;
-                                            const eventTime = alignedSeekMsFor(event);
-                                            const markerTitle = getMarkerTitle(event);
-                                            return (
-                                                <button
-                                                    key={marker.key || marker.position}
-                                                    type="button"
-                                                    className={`pointer-events-auto absolute top-1/2 flex h-7 w-7 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border border-slate-950/70 text-slate-950 shadow transition focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 focus:ring-offset-slate-950 ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "scale-110 ring-2 ring-sky-400/80" : "hover:scale-110"}`}
-                                                    style={{ left: `${marker.position * 100}%` }}
-                                                    onClick={() => jumpToEvent(event)}
-                                                    onMouseEnter={() => setHoveredMarker(marker)}
-                                                    onMouseLeave={() => setHoveredMarker(null)}
-                                                    onFocus={() => setHoveredMarker(marker)}
-                                                    onBlur={() => setHoveredMarker(null)}
-                                                    title={`${event.kind || "event"} • ${markerTitle}${eventTime != null ? ` • ${formatMaybeTime(eventTime)}` : ""}`}
-                                                >
-                                                    <span className="sr-only">{markerTitle}</span>
-                                                    <MarkerIcon kind={event.kind} className="h-3.5 w-3.5 text-slate-950" />
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
                                 </div>
+
+                                {/* Markers overlay (on top) */}
+                                <div className="pointer-events-none absolute inset-0 z-50">
+                                    {timelineMarkers.map((marker) => {
+                                        const event = marker.event;
+                                        const isActive = activeEventId && event.__key === activeEventId;
+                                        const eventTime = alignedSeekMsFor(event);
+                                        const markerTitle = getMarkerTitle(event);
+                                        return (
+                                            <button
+                                                key={marker.key || marker.position}
+                                                type="button"
+                                                className={`pointer-events-auto absolute top-1/2 flex h-8 w-8 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border border-slate-950/70 text-slate-950 shadow transition focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 focus:ring-offset-slate-950 ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "scale-110 ring-2 ring-sky-400/80" : "hover:scale-110"}`}
+                                                style={{left: `${marker.position * 100}%`}}
+                                                onClick={() => jumpToEvent(event)}
+                                                onMouseEnter={() => setHoveredMarker(marker)}
+                                                onMouseLeave={() => setHoveredMarker(null)}
+                                                onFocus={() => setHoveredMarker(marker)}
+                                                onBlur={() => setHoveredMarker(null)}
+                                                title={`${event.kind || "event"} • ${markerTitle}${eventTime != null ? ` • ${formatMaybeTime(eventTime)}` : ""}`}
+                                            >
+                                                <MarkerIcon kind={event.kind} className="text-slate-950"/>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+
+                                {/* Scrubber knob visual (above track but below markers) */}
                                 <div
-                                    className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-sky-400 bg-slate-950 shadow-[0_0_0_4px_rgba(56,189,248,0.15)] transition"
-                                    style={{ left: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%`, transform: "translate(-50%, -50%)" }}
+                                    className="absolute z-40 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-sky-400 bg-slate-950 shadow-[0_0_0_4px_rgba(56,189,248,0.15)] transition"
+                                    style={{
+                                        left: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%`,
+                                        transform: "translate(-50%, -50%)"
+                                    }}
                                 />
                             </div>
+
+                            {/* Input slider (under markers; still functional) */}
                             <input
                                 type="range"
                                 min={0}
@@ -823,8 +784,38 @@ export default function SessionReplay({ sessionId }) {
                                     setPlayerStatus("playing");
                                     setCurrentTime(newTime);
                                 }}
-                                className="timeline-slider absolute inset-0 z-10"
+                                className="timeline-slider absolute inset-0 z-30 appearance-none bg-transparent"
+                                // Tailwind can’t style the native track/thumb cross-browser; ensure CSS sets no huge hitbox.
                             />
+
+                            {/* Hover card */}
+                            {hoveredMarker && (() => {
+                                const { event } = hoveredMarker;
+                                const x = Math.min(92, Math.max(8, hoveredMarker.position * 100));
+                                const sub = getMarkerMeta(event);
+                                return (
+                                    <div
+                                        className="pointer-events-none absolute z-50 -translate-x-1/2 rounded-xl border border-slate-900/60 bg-slate-950/95 px-3 py-2 text-xs text-slate-200 shadow-2xl backdrop-blur"
+                                        style={{ left: `${x}%`, bottom: "calc(50% + 24px)" }}
+                                    >
+                                        <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.25em] text-slate-500">
+                                            <span className={`h-2 w-2 rounded-full ${KIND_COLORS[event.kind] || "bg-slate-500"}`} />
+                                            {event.kind}
+                                        </div>
+                                        <div className="mt-1 text-sm font-medium leading-snug text-slate-100 break-words">
+                                            {getMarkerTitle(event)}
+                                        </div>
+                                        {sub && (
+                                            <div className="mt-1 text-[11px] uppercase tracking-[0.3em] text-slate-500">
+                                                {sub}
+                                            </div>
+                                        )}
+                                        <div className="mt-1 text-[11px] text-slate-500">
+                                            {formatMaybeTime(alignedSeekMsFor(event))} rrweb • @{event._t ?? "—"}
+                                        </div>
+                                    </div>
+                                );
+                            })()}
                         </div>
                     </div>
                 </section>
@@ -957,7 +948,7 @@ export default function SessionReplay({ sessionId }) {
                             })}
 
                             {!renderGroups.length && !showAll && (
-                                <div className="rounded-xl border border-slate-900/60 bg-slate-900/70 px-4 py-3 text-xs text-slate-400">
+                                <div className="rounded-XL border border-slate-900/60 bg-slate-900/70 px-4 py-3 text-xs text-slate-400">
                                     No events near the current time. Try{" "}
                                     <button className="text-sky-400 underline" onClick={() => setShowAll(true)}>
                                         showing all

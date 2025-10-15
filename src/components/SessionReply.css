@@ -1,0 +1,7 @@
+.timeline-slider {
+    pointer-events: none; /* disable events on the track */
+}
+
+.timeline-slider::-webkit-slider-thumb {
+    pointer-events: auto; /* but keep thumb draggable */
+}
