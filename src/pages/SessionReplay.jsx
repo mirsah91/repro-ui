@@ -511,12 +511,47 @@ export default function SessionReplay({ sessionId }) {
         email: "bg-fuchsia-400",
     };
 
-    const KIND_ICONS = {
-        action: "⚡",
-        request: "🌐",
-        db: "💾",
-        email: "✉️",
+    const KIND_ICON_COMPONENTS = {
+        action: (props) => (
+            <svg viewBox="0 0 20 20" fill="currentColor" {...props}>
+                <path d="M11.3 1.046a.75.75 0 0 1 1.39.408l-.062 5.421 3.318-.002a.75.75 0 0 1 .581 1.225l-7.5 9a.75.75 0 0 1-1.32-.485l.062-5.421-3.318.002a.75.75 0 0 1-.58-1.225l7.5-9Z" />
+            </svg>
+        ),
+        request: (props) => (
+            <svg viewBox="0 0 20 20" fill="currentColor" {...props}>
+                <path
+                    fillRule="evenodd"
+                    d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm6.32-6a6.52 6.52 0 0 1-2.57 3.605c.266-.988.417-2.183.437-3.605Zm-9.75 3.605A6.52 6.52 0 0 1 3.68 12h3.133c.02 1.422.17 2.617.437 3.605Zm-.437-5.105H3.68a6.52 6.52 0 0 1 2.57-3.605c-.267.988-.417 2.183-.437 3.605Zm6.065 0H7.802c.02-1.603.207-2.948.482-3.863.3-.994.635-1.137.716-1.137.082 0 .416.143.716 1.137.275.915.463 2.26.482 3.863Zm1.568 0c-.02-1.422-.17-2.617-.437-3.605a6.52 6.52 0 0 1 2.57 3.605h-2.133Zm-3.633 1.5c-.02 1.603-.207 2.948-.482 3.863-.3.994-.635 1.137-.716 1.137-.082 0-.416-.143-.716-1.137-.275-.915-.463-2.26-.482-3.863Zm1.568 0h3.133a6.52 6.52 0 0 1-2.57 3.605c.267-.988.417-2.183.437-3.605Z"
+                    clipRule="evenodd"
+                />
+            </svg>
+        ),
+        db: (props) => (
+            <svg viewBox="0 0 20 20" fill="currentColor" {...props}>
+                <path d="M4 5c0-1.657 2.686-3 6-3s6 1.343 6 3v10c0 1.657-2.686 3-6 3s-6-1.343-6-3V5Z" />
+                <path d="M4 9.5C4 10.881 6.686 12 10 12s6-1.119 6-2.5v-1C16 9.881 13.314 11 10 11s-6-1.119-6-2.5v1Z" />
+                <path d="M4 14c0 1.381 2.686 2.5 6 2.5s6-1.119 6-2.5v1c0 1.381-2.686 2.5-6 2.5s-6-1.119-6-2.5v-1Z" />
+            </svg>
+        ),
+        email: (props) => (
+            <svg viewBox="0 0 20 20" fill="currentColor" {...props}>
+                <path d="M2.5 5.5A2.5 2.5 0 0 1 5 3h10a2.5 2.5 0 0 1 2.5 2.5v9a2.5 2.5 0 0 1-2.5 2.5H5A2.5 2.5 0 0 1 2.5 14.5v-9Z" />
+                <path
+                    d="m4.04 5.21 4.908 3.677a1.5 1.5 0 0 0 1.804 0L15.66 5.21A1 1 0 0 0 15 5H5a1 1 0 0 0-.96.21Z"
+                />
+            </svg>
+        ),
+        default: (props) => (
+            <svg viewBox="0 0 20 20" fill="currentColor" {...props}>
+                <circle cx="10" cy="10" r="5" />
+            </svg>
+        ),
     };
+
+    function MarkerIcon({ kind, className }) {
+        const Icon = KIND_ICON_COMPONENTS[kind] || KIND_ICON_COMPONENTS.default;
+        return <Icon className={className} aria-hidden="true" />;
+    }
 
     function alignedSeekMsFor(ev) {
         const serverMs =
@@ -742,18 +777,17 @@ export default function SessionReplay({ sessionId }) {
                                         style={{ width: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%` }}
                                     />
 
-                                    <div className="pointer-events-none absolute inset-0 z-30">
+                                    <div className="pointer-events-none absolute inset-0 z-40">
                                         {timelineMarkers.map((marker) => {
                                             const event = marker.event;
                                             const isActive = activeEventId && event.__key === activeEventId;
                                             const eventTime = alignedSeekMsFor(event);
                                             const markerTitle = getMarkerTitle(event);
-                                            const markerIcon = KIND_ICONS[event.kind] || "•";
                                             return (
                                                 <button
                                                     key={marker.key || marker.position}
                                                     type="button"
-                                                    className={`pointer-events-auto absolute top-1/2 flex h-5 w-5 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border border-slate-950/70 text-[11px] font-semibold text-slate-950 shadow transition focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 focus:ring-offset-slate-950 ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "scale-110 ring-2 ring-sky-400/80" : "hover:scale-110"}`}
+                                                    className={`pointer-events-auto absolute top-1/2 flex h-7 w-7 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border border-slate-950/70 text-slate-950 shadow transition focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 focus:ring-offset-slate-950 ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "scale-110 ring-2 ring-sky-400/80" : "hover:scale-110"}`}
                                                     style={{ left: `${marker.position * 100}%` }}
                                                     onClick={() => jumpToEvent(event)}
                                                     onMouseEnter={() => setHoveredMarker(marker)}
@@ -763,7 +797,7 @@ export default function SessionReplay({ sessionId }) {
                                                     title={`${event.kind || "event"} • ${markerTitle}${eventTime != null ? ` • ${formatMaybeTime(eventTime)}` : ""}`}
                                                 >
                                                     <span className="sr-only">{markerTitle}</span>
-                                                    <span aria-hidden>{markerIcon}</span>
+                                                    <MarkerIcon kind={event.kind} className="h-3.5 w-3.5 text-slate-950" />
                                                 </button>
                                             );
                                         })}
