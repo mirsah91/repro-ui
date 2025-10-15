@@ -9,10 +9,14 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 const WINDOW_MS = 1500;
 const POLL_MS = 200;
 
+// ===== DEBUG =====
+const DEBUG = true;
+const log = (...a) => DEBUG && console.log("[repro:replay]", ...a);
+const warn = (...a) => DEBUG && console.warn("[repro:replay]", ...a);
+
 // rank order inside one action group
 const KIND_RANK = { action: 0, request: 1, db: 2, email: 3 };
 
-// pick a point time (server epoch ms) from any item
 function itemServerTime(it) {
     if (typeof it.t === "number") return it.t;
     if (typeof it.tStart === "number") return it.tStart;
@@ -20,47 +24,32 @@ function itemServerTime(it) {
     return null;
 }
 
-// group items by actionId; singletons for items without actionId
 function groupByAction(items) {
     const groups = new Map();
     for (const it of items) {
-        const key =
-            it.actionId ||
-            `__nogroup__:${it.kind}:${Math.random().toString(36).slice(2)}`;
+        const key = it.actionId || `__nogroup__:${it.kind}:${Math.random().toString(36).slice(2)}`;
         let g = groups.get(key);
-        if (!g) {
-            g = { id: key, items: [], start: Infinity, end: -Infinity };
-            groups.set(key, g);
-        }
+        if (!g) { g = { id: key, items: [], start: Infinity, end: -Infinity }; groups.set(key, g); }
         const t = itemServerTime(it);
-        if (typeof t === "number") {
-            g.start = Math.min(g.start, t);
-            g.end = Math.max(g.end, t);
-        }
+        if (typeof t === "number") { g.start = Math.min(g.start, t); g.end = Math.max(g.end, t); }
         g.items.push(it);
     }
-
-    // sort items inside group by time, then by kind rank
     for (const g of groups.values()) {
         g.items.sort((a, b) => {
             const ra = KIND_RANK[a.kind] ?? 99;
             const rb = KIND_RANK[b.kind] ?? 99;
             if (ra !== rb) return ra - rb;
-
             const ta = itemServerTime(a) ?? Infinity;
             const tb = itemServerTime(b) ?? Infinity;
             return ta - tb;
         });
     }
-
-    // sort groups by their first timestamp
     return Array.from(groups.values()).sort((a, b) => a.start - b.start);
 }
 
 function useRrwebStream(sessionId) {
     const [meta, setMeta] = useState({ firstSeq: 0, lastSeq: 0 });
-    const [status, setStatus] = useState("idle"); // idle | loading | ready | error
-
+    const [status, setStatus] = useState("idle");
     const queueRef = useRef([]);
     const nextSeqRef = useRef(0);
     const doneRef = useRef(false);
@@ -79,7 +68,9 @@ function useRrwebStream(sessionId) {
                 doneRef.current = false;
                 queueRef.current = [];
                 setStatus("ready");
-            } catch {
+                log("rrweb meta loaded", m);
+            } catch (e) {
+                warn("meta load failed", e);
                 setStatus("error");
             }
         })();
@@ -88,23 +79,22 @@ function useRrwebStream(sessionId) {
 
     async function pullMore(limit = 5) {
         if (doneRef.current) return;
-        const afterSeq = nextSeqRef.current - 1; // endpoint expects > afterSeq
+        const afterSeq = nextSeqRef.current - 1;
         const r = await fetch(`${API_BASE}/v1/sessions/${sessionId}/rrweb?afterSeq=${afterSeq}&limit=${limit}`);
         const j = await r.json();
         const items = j?.items || [];
         if (!items.length) { doneRef.current = true; return; }
-
         for (const it of items) {
             const events = decodeBase64JsonArray(it.base64);
             if (events?.length) queueRef.current.push(...events);
             nextSeqRef.current = Math.max(nextSeqRef.current, Number(it.seq) + 1);
         }
+        log("pulled rrweb chunk", { limit, got: items.length, nextSeq: nextSeqRef.current, queue: queueRef.current.length });
     }
 
     return { meta, status, queueRef, pullMore, doneRef };
 }
 
-// utility: pick a usable timestamp from a timeline item
 function tickTime(ev) {
     if (typeof ev?.t === "number") return ev.t;
     if (typeof ev?.tStart === "number") return ev.tStart;
@@ -112,38 +102,20 @@ function tickTime(ev) {
     return null;
 }
 
-// Build a [start,end] window in SERVER time for any timeline item
 function deriveServerWindow(ev) {
     const base =
-        typeof ev?.t === "number"
-            ? ev.t
-            : typeof ev?.tStart === "number"
-                ? ev.tStart
-                : typeof ev?.tEnd === "number"
-                    ? ev.tEnd
-                    : null;
-
+        typeof ev?.t === "number" ? ev.t :
+            typeof ev?.tStart === "number" ? ev.tStart :
+                typeof ev?.tEnd === "number" ? ev.tEnd : null;
     if (base == null) return { start: null, end: null };
-
-    // If action has explicit window, use it
     if (typeof ev.tStart === "number" || typeof ev.tEnd === "number") {
-        return {
-            start: typeof ev.tStart === "number" ? ev.tStart : base,
-            end: typeof ev.tEnd === "number" ? ev.tEnd : base,
-        };
+        return { start: typeof ev.tStart === "number" ? ev.tStart : base, end: typeof ev.tEnd === "number" ? ev.tEnd : base };
     }
-
-    // If request has duration, treat t as END
     const dur = typeof ev?.meta?.durMs === "number" ? ev.meta.durMs : null;
-    if (dur && dur > 0) {
-        return { start: base - dur, end: base };
-    }
-
-    // Instant
+    if (dur && dur > 0) return { start: base - dur, end: base };
     return { start: base, end: base };
 }
 
-// Is absolute time `abs` near [start,end] (both in SERVER ms)?
 function absInWindow(abs, start, end, win) {
     if (typeof abs !== "number") return false;
     if (typeof start !== "number" && typeof end !== "number") return false;
@@ -155,147 +127,205 @@ function absInWindow(abs, start, end, win) {
 export default function SessionReplay({ sessionId }) {
     const containerRef = useRef(null);
     const replayerRef = useRef(null);
-    const rrwebZeroTsRef = useRef(null); // first rrweb event timestamp (epoch ms)
+    const rrwebZeroTsRef = useRef(null);
     const lastPausedTimeRef = useRef(0);
     const lastPlayerSizeRef = useRef({ width: 0, height: 0 });
 
     const { status, queueRef, pullMore, doneRef } = useRrwebStream(sessionId);
-    const rawTicks = useTimeline(sessionId); // backend events (server time)
+    const rawTicks = useTimeline(sessionId);
 
-    const [currentTime, setCurrentTime] = useState(0); // rrweb virtual ms
-    const [playerStatus, setPlayerStatus] = useState("idle"); // idle | loading | playing | paused | no-rrweb | error
+    const [currentTime, setCurrentTime] = useState(0);
+    const [playerStatus, setPlayerStatus] = useState("idle");
     const [showAll, setShowAll] = useState(false);
     const [playerMeta, setPlayerMeta] = useState({ totalTime: 0 });
     const [hoveredMarker, setHoveredMarker] = useState(null);
     const [activeEventId, setActiveEventId] = useState(null);
 
-    // time alignment
-    const rrwebFirstTsRef = useRef(null);   // first rrweb event.timestamp
-    const clockOffsetRef = useRef(0);       // server_ms - rrweb_ms
+    const rrwebFirstTsRef = useRef(null);
+    const clockOffsetRef = useRef(0);
 
+    // ---- sizing helpers (content-box) ----
+    const measureContainerSize = React.useCallback(() => {
+        const el = containerRef.current;
+        if (!el) return null;
+        const w = el.clientWidth;
+        const h = el.clientHeight;
+        if (w > 0 && h > 0) {
+            const size = { width: Math.round(w), height: Math.round(h) };
+            log("measureContainerSize (client):", size);
+            return size;
+        }
+        const rect = el.getBoundingClientRect();
+        const cs = window.getComputedStyle(el);
+        const bw = (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.borderRightWidth) || 0);
+        const bh = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+        const size = { width: Math.max(0, Math.round(rect.width - bw)), height: Math.max(0, Math.round(rect.height - bh)) };
+        log("measureContainerSize (fallback):", size);
+        return size.width && size.height ? size : null;
+    }, []);
+
+    const waitForContainerSize = React.useCallback(async () => {
+        let size = measureContainerSize();
+        for (let i = 0; i < 20 && (!size || size.width < 2 || size.height < 2); i++) {
+            await new Promise((r) => requestAnimationFrame(r));
+            size = measureContainerSize();
+            log("waitForContainerSize tick", i, size);
+        }
+        return size;
+    }, [measureContainerSize]);
+
+    // ---- robust iframe finding & syncing ----
+    const findIframe = React.useCallback(() => {
+        const root = containerRef.current;
+        if (!root) return null;
+        // rrweb may wrap with different classnames across versions; just find any iframe inside.
+        const iframe = root.querySelector("iframe");
+        return iframe || null;
+    }, []);
+
+    const syncIframe = React.useCallback((size, tag = "sync") => {
+        const iframe = findIframe();
+        if (!iframe) {
+            warn(`${tag}: iframe not found (will retry)`);
+            // retry a few times over the next frames — iframe often appears 1–2 RAFs after init
+            let attempts = 0;
+            const tryAgain = () => {
+                const ifr = findIframe();
+                attempts++;
+                if (ifr) {
+                    ifr.style.width = `${size.width}px`;
+                    ifr.style.height = `${size.height}px`;
+                    ifr.setAttribute("width", String(size.width));
+                    ifr.setAttribute("height", String(size.height));
+                    log(`${tag}: iframe found on retry ${attempts}`, {
+                        calc: size,
+                        iframeClient: { w: ifr.clientWidth, h: ifr.clientHeight },
+                    });
+                    return;
+                }
+                if (attempts < 8) requestAnimationFrame(tryAgain);
+                else warn(`${tag}: iframe still missing after retries`);
+            };
+            requestAnimationFrame(tryAgain);
+            return;
+        }
+        // set both style and attributes
+        iframe.style.width = `${size.width}px`;
+        iframe.style.height = `${size.height}px`;
+        iframe.setAttribute("width", String(size.width));
+        iframe.setAttribute("height", String(size.height));
+        const dump = {
+            calc: size,
+            iframeClient: { w: iframe.clientWidth, h: iframe.clientHeight },
+            iframeAttrs: { width: iframe.getAttribute("width"), height: iframe.getAttribute("height") },
+        };
+        log(`${tag}: synced iframe`, dump);
+    }, [findIframe]);
+
+    // Observe iframe insertion once, right after init
+    const setupIframeObserver = React.useCallback((size) => {
+        const root = containerRef.current;
+        if (!root) return () => {};
+        const mo = new MutationObserver(() => {
+            const iframe = findIframe();
+            if (iframe) {
+                log("MutationObserver: iframe appeared");
+                syncIframe(size, "mo-sync");
+                // optional: disconnect after first sync
+                mo.disconnect();
+            }
+        });
+        mo.observe(root, { childList: true, subtree: true });
+        return () => mo.disconnect();
+    }, [findIframe, syncIframe]);
+
+    // ---- alignment helpers ----
     const serverToRrwebOffsetMs = React.useCallback((serverMs) => {
         if (typeof serverMs !== "number") return null;
         const rrFirst = rrwebFirstTsRef.current;
-        const offset = clockOffsetRef.current ?? 0; // server - rrweb
+        const offset = clockOffsetRef.current ?? 0;
         if (typeof rrFirst !== "number") return null;
-        const virtual = (serverMs - offset) - rrFirst;
+        const virtual = serverMs - offset - rrFirst;
         return Number.isFinite(virtual) ? Math.max(0, virtual) : null;
     }, []);
 
     const toRrwebTime = (serverMs) =>
-        typeof serverMs === "number" ? (serverMs - (clockOffsetRef.current || 0)) : null;
+        typeof serverMs === "number" ? serverMs - (clockOffsetRef.current || 0) : null;
 
-    // normalize and sort ticks once
+    // ---- normalize ticks ----
     const ticks = useMemo(() => {
-        const zero = rrwebZeroTsRef.current; // may be null until replay bootstraps
+        const zero = rrwebZeroTsRef.current;
         const out = [];
-
         for (const [idx, ev] of (rawTicks || []).entries()) {
             const { start, end } = deriveServerWindow(ev);
             if (typeof start !== "number" && typeof end !== "number") continue;
-
-            // aligned (rrweb) times are derived only if we already know the rrweb epoch
-            const alignedStart = typeof zero === "number" && typeof start === "number" ? (start - zero) : null;
-            const alignedEnd   = typeof zero === "number" && typeof end   === "number" ? (end   - zero) : null;
-
-            const keyParts = [
-                ev.id,
-                ev.actionId,
-                ev.kind,
-                ev.meta?.id,
-                typeof ev.t === "number" ? ev.t : null,
-                typeof start === "number" ? start : null,
-                typeof end === "number" ? end : null,
-            ].filter(Boolean);
-
+            const alignedStart = typeof zero === "number" && typeof start === "number" ? start - zero : null;
+            const alignedEnd = typeof zero === "number" && typeof end === "number" ? end - zero : null;
+            const keyParts = [ev.id, ev.actionId, ev.kind, ev.meta?.id, typeof ev.t === "number" ? ev.t : null, typeof start === "number" ? start : null, typeof end === "number" ? end : null].filter(Boolean);
             out.push({
                 ...ev,
-                _t: tickTime(ev),           // original server “point” for display fallbacks
-                _startServer: start,        // server ms
-                _endServer: end,            // server ms
-                _alignedStart: alignedStart, // rrweb ms (since first rrweb event)
-                _alignedEnd: alignedEnd,     // rrweb ms
+                _t: tickTime(ev),
+                _startServer: start,
+                _endServer: end,
+                _alignedStart: alignedStart,
+                _alignedEnd: alignedEnd,
                 __key: `${keyParts.join("|") || ev.kind || "event"}-${idx}`,
             });
         }
-
-        // Sort by SERVER start (stable regardless of rrweb init timing)
         out.sort((a, b) => {
-            const aa = (typeof a._startServer === "number" ? a._startServer : a._endServer ?? 0);
-            const bb = (typeof b._startServer === "number" ? b._startServer : b._endServer ?? 0);
+            const aa = typeof a._startServer === "number" ? a._startServer : a._endServer ?? 0;
+            const bb = typeof b._startServer === "number" ? b._startServer : b._endServer ?? 0;
             if (aa !== bb) return aa - bb;
-            // tie-break by duration
             const da = (a._endServer ?? aa) - (a._startServer ?? aa);
             const db = (b._endServer ?? bb) - (b._startServer ?? bb);
             return da - db;
         });
-
         return out;
     }, [rawTicks]);
 
-    // absolute rrweb "now" in SERVER epoch ms (or null if player not ready)
     const absNow = useMemo(() => {
         const zero = rrwebZeroTsRef.current;
         return typeof zero === "number" ? zero + currentTime : null;
     }, [currentTime]);
 
-    // choose base items: either everything (showAll) or only items near the current window
     const baseItems = useMemo(() => {
         if (showAll) return ticks;
         if (absNow == null) return [];
-        return ticks.filter((ev) =>
-            absInWindow(absNow, ev._startServer, ev._endServer, WINDOW_MS)
-        );
+        return ticks.filter((ev) => absInWindow(absNow, ev._startServer, ev._endServer, WINDOW_MS));
     }, [ticks, showAll, absNow]);
 
-    // groups to render (Action → Request → DB → Email)
-    const renderGroups = React.useMemo(() => {
-        return groupByAction(baseItems);
-    }, [baseItems]);
+    const renderGroups = useMemo(() => groupByAction(baseItems), [baseItems]);
 
-    // bootstrap player once rrweb meta is ready
+    // ---- bootstrap rrweb ----
     useEffect(() => {
         if (status !== "ready" || !containerRef.current || replayerRef.current) return;
 
         let cancelled = false;
+        let disconnectMO = null;
+
         (async () => {
             try {
                 setPlayerStatus("loading");
 
-                // ensure we have at least 2 events for rrweb init
                 while (queueRef.current.length < 2 && !doneRef.current) {
                     await pullMore(10);
                 }
                 const initial = queueRef.current.splice(0, queueRef.current.length);
-                if (!initial.length) return;
+                if (!initial.length) { setPlayerStatus("no-rrweb"); return; }
 
                 rrwebZeroTsRef.current = initial[0]?.timestamp || null;
-
-                if (!initial.length || initial.length < 2) {
-                    setPlayerStatus("no-rrweb");
-                    return;
-                }
-
                 rrwebFirstTsRef.current = initial[0]?.timestamp || null;
 
-                // compute initial offset if ticks already available
                 if (rrwebFirstTsRef.current && ticks.length) {
                     clockOffsetRef.current = ticks[0]._t - rrwebFirstTsRef.current;
                 } else {
                     clockOffsetRef.current = 0;
                 }
+                log("clock offsets", { rrwebFirst: rrwebFirstTsRef.current, tick0: ticks[0]?._t, offset: clockOffsetRef.current });
 
-                // init replayer
-                if (replayerRef.current) {
-                    try {
-                        replayerRef.current.pause();
-                    } catch (err) {
-                        console.warn("unable to pause existing replayer", err);
-                    }
-                }
-                const measured = measureContainerSize();
-                const width = measured?.width;
-                const height = measured?.height;
+                const measured = await waitForContainerSize();
+                if (!measured) { setPlayerStatus("error"); warn("no measured size"); return; }
+                log("init measured size", measured);
 
                 const rep = new Replayer(initial, {
                     root: containerRef.current,
@@ -303,86 +333,86 @@ export default function SessionReplay({ sessionId }) {
                     UNSAFE_replayCanvas: true,
                     speed: 1.0,
                     mouseTail: false,
-                    width,
-                    height,
+                    width: measured.width,
+                    height: measured.height,
                 });
                 replayerRef.current = rep;
-                if (width && height) {
-                    lastPlayerSizeRef.current = { width, height };
-                }
-                rep.play();
+                lastPlayerSizeRef.current = { ...measured };
 
-                // keep current time in sync
+                // Watch for iframe insertion and sync immediately
+                disconnectMO = setupIframeObserver(measured);
+
+                // Also try to sync now (in case iframe is already there later this tick)
+                requestAnimationFrame(() => syncIframe(measured, "init-rAF"));
+
+                rep.play();
+                setPlayerStatus("playing");
+
+                // poll player time
                 const interval = window.setInterval(() => {
                     try {
                         const t = replayerRef.current?.getCurrentTime?.() ?? 0;
                         setCurrentTime(t);
                     } catch (err) {
-                        console.warn("failed to poll current time", err);
+                        warn("poll current time failed", err);
                     }
                 }, POLL_MS);
 
+                // read meta
                 try {
                     const meta = rep.getMetaData?.();
-                    if (meta) setPlayerMeta({ totalTime: meta.totalTime ?? 0 });
-                } catch (err) {
-                    console.warn("failed to read initial rrweb metadata", err);
-                }
+                    if (meta) { setPlayerMeta({ totalTime: meta.totalTime ?? 0 }); log("rrweb meta", meta); }
+                } catch (err) { warn("read meta failed", err); }
 
-                window.requestAnimationFrame(() => {
-                    if (cancelled) return;
-                    updatePlayerSize();
-                });
-
-                // background feed: add events one-by-one (safer)
+                // feed new events
                 (async function feed() {
                     while (!cancelled && replayerRef.current && !doneRef.current) {
-                        if (queueRef.current.length < 50) {
-                            await pullMore(10);
-                        }
+                        if (queueRef.current.length < 50) await pullMore(10);
                         const batch = queueRef.current.splice(0, 50);
                         for (const ev of batch) {
-                            try {
-                                replayerRef.current.addEvent(ev);
-                            } catch (err) {
-                                console.warn("failed to append rrweb event", err);
-                            }
+                            try { replayerRef.current.addEvent(ev); }
+                            catch (err) { warn("addEvent failed", err); }
                         }
                         try {
                             const meta = replayerRef.current?.getMetaData?.();
-                            if (meta) setPlayerMeta((prev) => ({ totalTime: meta.totalTime ?? prev.totalTime }));
-                        } catch (err) {
-                            console.warn("failed to refresh rrweb metadata", err);
-                        }
-                        await new Promise(r => setTimeout(r, 100));
+                            if (meta) setPlayerMeta((p) => ({ totalTime: meta.totalTime ?? p.totalTime }));
+                        } catch (err) { warn("refresh meta failed", err); }
+                        await new Promise((r) => setTimeout(r, 100));
                     }
                 })();
 
-                setPlayerStatus("playing");
-                return () => window.clearInterval(interval);
+                // mismatch sentinel
+                const mismatchSentinel = window.setInterval(() => {
+                    const iframe = findIframe();
+                    if (!iframe) return;
+                    const calc = lastPlayerSizeRef.current;
+                    const iW = iframe.clientWidth, iH = iframe.clientHeight;
+                    if (calc.width !== iW || calc.height !== iH) {
+                        warn("SIZE MISMATCH!", { calc, iframeClient: { w: iW, h: iH } });
+                    }
+                }, 1000);
+
+                return () => { window.clearInterval(interval); window.clearInterval(mismatchSentinel); };
             } catch (e) {
-                console.error("replay bootstrap error", e);
+                warn("replay bootstrap error", e);
                 setPlayerStatus("error");
             }
         })();
 
         return () => {
             cancelled = true;
-            try {
-                replayerRef.current?.pause();
-            } catch (err) {
-                console.warn("unable to pause replayer on cleanup", err);
-            }
+            try { replayerRef.current?.pause(); } catch {}
             replayerRef.current = null;
+            if (disconnectMO) disconnectMO();
         };
-        // intentionally only depend on status to avoid reinitializing on every render
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [status]);
 
-    // if ticks arrive after rrweb started, (re)compute offset without reinitializing player
+    // keep offset if ticks later
     useEffect(() => {
         if (!rrwebFirstTsRef.current || !ticks.length) return;
         clockOffsetRef.current = ticks[0]._t - rrwebFirstTsRef.current;
+        log("recomputed offset", clockOffsetRef.current);
     }, [ticks]);
 
     const isPlaying = playerStatus === "playing";
@@ -391,86 +421,54 @@ export default function SessionReplay({ sessionId }) {
     const timelineMarkers = useMemo(() => {
         const total = playerMeta.totalTime || 0;
         if (!total) return [];
-
         const markers = [];
         for (const ev of ticks) {
             const aligned =
-                typeof ev._alignedStart === "number"
-                    ? ev._alignedStart
-                    : typeof ev._alignedEnd === "number"
-                        ? ev._alignedEnd
-                        : serverToRrwebOffsetMs(ev._t);
-
+                typeof ev._alignedStart === "number" ? ev._alignedStart :
+                    typeof ev._alignedEnd === "number" ? ev._alignedEnd :
+                        serverToRrwebOffsetMs(ev._t);
             if (typeof aligned !== "number" || !Number.isFinite(aligned)) continue;
             const position = Math.max(0, Math.min(1, aligned / total));
-            markers.push({
-                key: ev.__key,
-                event: ev,
-                position,
-            });
+            markers.push({ key: ev.__key, event: ev, position });
         }
-
         return markers;
     }, [ticks, playerMeta.totalTime, serverToRrwebOffsetMs]);
 
-    const measureContainerSize = React.useCallback(() => {
-        const container = containerRef.current;
-        if (!container) return null;
-
-        const clientWidth = container.clientWidth || container.offsetWidth;
-        const clientHeight = container.clientHeight || container.offsetHeight;
-
-        let width = Math.round(clientWidth || 0);
-        let height = Math.round(clientHeight || 0);
-
-        if (!width || !height) {
-            const rect = container.getBoundingClientRect();
-            width = Math.round(rect?.width || 0);
-            height = Math.round(rect?.height || 0);
-        }
-
-        if (!width || !height) return null;
-        return { width, height };
-    }, []);
-
-    const updatePlayerSize = React.useCallback(() => {
+    const updatePlayerSize = React.useCallback((tag = "manual") => {
         const rep = replayerRef.current;
         if (!rep) return;
-
         const size = measureContainerSize();
         if (!size) return;
 
         const lastSize = lastPlayerSizeRef.current;
-        if (lastSize.width === size.width && lastSize.height === size.height) return;
+        if (lastSize.width === size.width && lastSize.height === size.height) {
+            log(`${tag}: size unchanged`, size);
+            return;
+        }
 
         lastPlayerSizeRef.current = size;
         try {
             rep.setConfig?.({ width: size.width, height: size.height });
+            log(`${tag}: setConfig`, size);
+            syncIframe(size, `${tag}:sync`);
         } catch (err) {
-            console.warn("unable to resize replayer", err);
+            warn(`${tag}: setConfig failed`, err);
         }
-    }, [measureContainerSize]);
+    }, [measureContainerSize, syncIframe]);
 
-    React.useLayoutEffect(() => {
+    // Resize observer
+    useEffect(() => {
         const container = containerRef.current;
         if (!container || typeof ResizeObserver === "undefined") {
-            updatePlayerSize();
-            return undefined;
+            updatePlayerSize("noRO");
+            return;
         }
-
         const observer = new ResizeObserver((entries) => {
-            if (!entries.length) {
-                updatePlayerSize();
-                return;
-            }
-
+            if (!entries.length) { updatePlayerSize("RO-empty"); return; }
             const entry = entries[0];
-            const boxSize = Array.isArray(entry.contentBoxSize)
-                ? entry.contentBoxSize[0]
-                : entry.contentBoxSize;
+            const boxSize = Array.isArray(entry.contentBoxSize) ? entry.contentBoxSize[0] : entry.contentBoxSize;
             const width = boxSize?.inlineSize || entry.contentRect?.width;
             const height = boxSize?.blockSize || entry.contentRect?.height;
-
             if (width && height) {
                 const rounded = { width: Math.round(width), height: Math.round(height) };
                 const lastSize = lastPlayerSizeRef.current;
@@ -478,23 +476,22 @@ export default function SessionReplay({ sessionId }) {
                     lastPlayerSizeRef.current = rounded;
                     try {
                         replayerRef.current?.setConfig?.({ width: rounded.width, height: rounded.height });
-                    } catch (err) {
-                        console.warn("unable to resize replayer", err);
-                    }
+                        log("RO:setConfig", rounded);
+                        syncIframe(rounded, "RO:sync");
+                    } catch (err) { warn("RO:setConfig failed", err); }
+                } else {
+                    log("RO:same size", rounded);
                 }
             } else {
-                updatePlayerSize();
+                updatePlayerSize("RO-fallback");
             }
         });
-
         observer.observe(container);
-        updatePlayerSize();
+        updatePlayerSize("RO-initial");
+        return () => observer.disconnect();
+    }, [updatePlayerSize, syncIframe]);
 
-        return () => {
-            observer.disconnect();
-        };
-    }, [updatePlayerSize]);
-
+    // --------------- UI ---------------
     const hoverPosition = hoveredMarker ? Math.min(92, Math.max(8, hoveredMarker.position * 100)) : 0;
 
     const KIND_COLORS = {
@@ -505,16 +502,12 @@ export default function SessionReplay({ sessionId }) {
     };
 
     function alignedSeekMsFor(ev) {
-        // prefer start → end → point
         const serverMs =
             (typeof ev._startServer === "number" && ev._startServer) ??
             (typeof ev._endServer === "number" && ev._endServer) ??
-            (typeof ev._t === "number" && ev._t) ??
-            null;
-
+            (typeof ev._t === "number" && ev._t) ?? null;
         const rrMs = serverToRrwebOffsetMs(serverMs);
         if (rrMs == null) return null;
-
         const total = replayerRef.current?.getMetaData?.().totalTime ?? 0;
         return Math.max(0, Math.min(total || 0, rrMs));
     }
@@ -522,28 +515,23 @@ export default function SessionReplay({ sessionId }) {
     function jumpToEvent(ev) {
         const rep = replayerRef.current;
         if (!rep) return;
-
         const target = alignedSeekMsFor(ev);
         if (target == null) return;
 
         try {
             rep.pause();
             lastPausedTimeRef.current = target;
-            rep.play(target); // seek + play (or play+pause if you want to land paused)
+            rep.play(target);
             setPlayerStatus("playing");
             setCurrentTime(target);
-        } catch (e) {
-            console.warn("seek failed", e);
-        }
+        } catch (e) { warn("seek failed", e); }
 
         const key = ev.__key;
         if (key) {
             setActiveEventId(key);
             window.requestAnimationFrame(() => {
                 const el = document.getElementById(`event-${key}`);
-                if (el) {
-                    el.scrollIntoView({ behavior: "smooth", block: "center" });
-                }
+                if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
             });
         }
     }
@@ -555,7 +543,6 @@ export default function SessionReplay({ sessionId }) {
         const seconds = totalSeconds % 60;
         return `${minutes}:${seconds.toString().padStart(2, "0")}`;
     };
-
     const formatMaybeTime = (ms) => (ms == null ? "—" : formatTime(ms));
 
     return (
@@ -568,20 +555,15 @@ export default function SessionReplay({ sessionId }) {
                             <p className="text-xs text-slate-400">session {sessionId ?? "—"}</p>
                         </div>
                         <div className="flex items-center gap-3 text-xs text-slate-400">
-                            <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 font-medium ${
-                                playerStatus === "playing"
-                                    ? "bg-emerald-500/10 text-emerald-300"
-                                    : playerStatus === "paused"
-                                        ? "bg-amber-500/10 text-amber-300"
-                                        : playerStatus === "loading"
-                                            ? "bg-sky-500/10 text-sky-300"
-                                            : playerStatus === "error"
-                                                ? "bg-rose-500/10 text-rose-300"
-                                                : "bg-slate-700/20 text-slate-300"
-                            }`}>
-                                <span className="h-2 w-2 rounded-full bg-current" />
-                                {playerStatus}
-                            </span>
+              <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 font-medium ${
+                  playerStatus === "playing" ? "bg-emerald-500/10 text-emerald-300" :
+                      playerStatus === "paused" ? "bg-amber-500/10 text-amber-300" :
+                          playerStatus === "loading" ? "bg-sky-500/10 text-sky-300" :
+                              playerStatus === "error" ? "bg-rose-500/10 text-rose-300" :
+                                  "bg-slate-700/20 text-slate-300"}`}>
+                <span className="h-2 w-2 rounded-full bg-current" />
+                  {playerStatus}
+              </span>
                             <span>{formatTime(currentTime)} / {formatTime(playerMeta.totalTime)}</span>
                         </div>
                     </div>
@@ -591,7 +573,6 @@ export default function SessionReplay({ sessionId }) {
                             ref={containerRef}
                             className="h-full w-full overflow-hidden rounded-2xl border border-slate-900/40 bg-slate-900/80 shadow-2xl"
                         />
-
                         {playerStatus === "loading" && (
                             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                                 <div className="rounded-full border border-slate-800/80 bg-slate-900/80 px-6 py-3 text-sm text-slate-300 shadow-xl">
@@ -622,27 +603,23 @@ export default function SessionReplay({ sessionId }) {
                                 onClick={() => {
                                     const rep = replayerRef.current;
                                     if (!rep) return;
-
-                                    if (isPlaying) {
+                                    if (playerStatus === "playing") {
                                         const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
                                         lastPausedTimeRef.current = now;
                                         rep.pause();
                                         setPlayerStatus("paused");
                                     } else if (canPlay) {
-                                        const resumeAt =
-                                            Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
-                                                ? lastPausedTimeRef.current
-                                                : (rep.getCurrentTime?.() ?? currentTime ?? 0);
-
+                                        const resumeAt = Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
+                                            ? lastPausedTimeRef.current : (rep.getCurrentTime?.() ?? currentTime ?? 0);
                                         rep.play(resumeAt);
                                         setPlayerStatus("playing");
                                     }
                                 }}
                                 className="inline-flex items-center gap-2 rounded-full border border-slate-800/60 bg-slate-900 px-4 py-2 font-medium text-slate-100 transition hover:border-slate-700 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
                             >
-                                <span className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                                    {isPlaying ? "Pause" : "Play"}
-                                </span>
+                <span className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                  {playerStatus === "playing" ? "Pause" : "Play"}
+                </span>
                             </button>
                             <button
                                 type="button"
@@ -658,6 +635,13 @@ export default function SessionReplay({ sessionId }) {
                                 className="inline-flex items-center gap-2 rounded-full border border-slate-800/60 bg-slate-900 px-4 py-2 text-xs uppercase tracking-[0.2em] text-slate-400 transition hover:border-slate-700 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
                             >
                                 Restart
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => updatePlayerSize("manual-click")}
+                                className="ml-2 inline-flex items-center gap-2 rounded-full border border-slate-800/60 bg-slate-900 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-400"
+                            >
+                                Resize Now (log)
                             </button>
                             <div className="ml-auto text-xs text-slate-400">
                                 {playerStatus === "paused" ? "paused" : "live"}
@@ -686,7 +670,6 @@ export default function SessionReplay({ sessionId }) {
                                     const rep = replayerRef.current;
                                     const newTime = Number(e.target.value);
                                     if (!rep) return;
-
                                     rep.pause();
                                     lastPausedTimeRef.current = newTime;
                                     rep.play(newTime);
@@ -695,52 +678,6 @@ export default function SessionReplay({ sessionId }) {
                                 }}
                                 className="timeline-slider absolute inset-0 z-10"
                             />
-
-                            {timelineMarkers.map((marker) => (
-                                <button
-                                    key={marker.key}
-                                    type="button"
-                                    onMouseEnter={() => setHoveredMarker(marker)}
-                                    onFocus={() => setHoveredMarker(marker)}
-                                    onMouseLeave={() => setHoveredMarker((curr) => (curr?.key === marker.key ? null : curr))}
-                                    onBlur={() => setHoveredMarker((curr) => (curr?.key === marker.key ? null : curr))}
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        jumpToEvent(marker.event);
-                                    }}
-                                    className={`absolute z-20 flex h-4 w-4 -translate-y-1/2 translate-x-[-50%] items-center justify-center rounded-full border-2 border-slate-950 shadow-lg transition hover:scale-110 focus:outline-none focus:ring-2 focus:ring-slate-200/80 ${KIND_COLORS[marker.event.kind] || "bg-slate-400"}`}
-                                    style={{ left: `${marker.position * 100}%`, top: "50%" }}
-                                >
-                                    <span className="sr-only">{marker.event.kind}</span>
-                                </button>
-                            ))}
-
-                            {hoveredMarker && (() => {
-                                const hoverEvent = hoveredMarker.event;
-                                const hoverAligned =
-                                    typeof hoverEvent._alignedStart === "number"
-                                        ? hoverEvent._alignedStart
-                                        : typeof hoverEvent._alignedEnd === "number"
-                                            ? hoverEvent._alignedEnd
-                                            : serverToRrwebOffsetMs(hoverEvent._t);
-                                return (
-                                    <div
-                                        className="absolute z-30 min-w-[220px] max-w-[260px] -translate-y-full rounded-xl border border-slate-800/80 bg-slate-900/95 px-3 py-3 text-xs text-slate-200 shadow-xl backdrop-blur"
-                                        style={{ left: `${hoverPosition}%`, top: "-0.75rem", transform: "translate(-50%, -100%)" }}
-                                    >
-                                        <div className="mb-1 flex items-center gap-2 text-[11px] uppercase tracking-[0.25em] text-slate-400">
-                                            <span className={`inline-flex h-2 w-2 rounded-full ${KIND_COLORS[hoverEvent.kind] || "bg-slate-500"}`} />
-                                            {hoverEvent.kind}
-                                        </div>
-                                        <div className="text-sm font-medium text-slate-100">
-                                            {hoverEvent.label || hoverEvent.actionId || hoverEvent.meta?.method || hoverEvent.meta?.op || hoverEvent.meta?.subject || hoverEvent.kind}
-                                        </div>
-                                        <div className="mt-1 text-[11px] text-slate-400">
-                                            @{hoverEvent._t ?? "—"} • {formatMaybeTime(hoverAligned)}
-                                        </div>
-                                    </div>
-                                );
-                            })()}
                         </div>
                     </div>
                 </section>
@@ -763,13 +700,7 @@ export default function SessionReplay({ sessionId }) {
                     </div>
 
                     <div className="flex-1 overflow-y-auto px-6 py-6 min-h-0">
-                        {playerStatus === "no-rrweb" && (
-                            <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-100">
-                                No rrweb events (or too few to initialize) for this session.
-                            </div>
-                        )}
-
-                        {!ticks.length && (
+                        {!renderGroups.length && (
                             <div className="text-xs text-slate-500">
                                 No backend timeline data for this session.
                             </div>
@@ -777,7 +708,7 @@ export default function SessionReplay({ sessionId }) {
 
                         <div className="space-y-5">
                             {renderGroups.map((g, gi) => {
-                                const action = g.items.find(it => it.kind === "action");
+                                const action = g.items.find((it) => it.kind === "action");
                                 const title = action?.label || action?.actionId || "Other events";
                                 const startAligned = action ? serverToRrwebOffsetMs(action.tStart) : null;
                                 const endAligned = action ? serverToRrwebOffsetMs(action.tEnd) : null;
@@ -819,13 +750,13 @@ export default function SessionReplay({ sessionId }) {
                                                         }`}
                                                     >
                                                         <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-slate-500">
-                                                            <span className="flex items-center gap-2">
-                                                                <span className={`h-2 w-2 rounded-full ${KIND_COLORS[e.kind] || "bg-slate-500"}`} />
-                                                                {e.kind}
-                                                            </span>
+                              <span className="flex items-center gap-2">
+                                <span className={`h-2 w-2 rounded-full ${KIND_COLORS[e.kind] || "bg-slate-500"}`} />
+                                  {e.kind}
+                              </span>
                                                             <span>
-                                                                @{e._t ?? "—"} • {typeof aligned === "number" ? `${Math.round(aligned)}ms` : "—"}
-                                                            </span>
+                                @{e._t ?? "—"} • {typeof aligned === "number" ? `${Math.round(aligned)}ms` : "—"}
+                              </span>
                                                         </div>
 
                                                         {e.kind === "request" && (
@@ -845,8 +776,8 @@ export default function SessionReplay({ sessionId }) {
                                                                 </div>
                                                                 {e.meta?.query && (
                                                                     <pre className="max-h-36 overflow-auto rounded-lg bg-slate-950/70 p-3 text-[11px] leading-relaxed text-slate-300">
-                                                                        {JSON.stringify(e.meta.query, null, 2)}
-                                                                    </pre>
+                                    {JSON.stringify(e.meta.query, null, 2)}
+                                  </pre>
                                                                 )}
                                                                 {e.meta?.resultMeta && (
                                                                     <div className="text-[11px] text-slate-400">
@@ -880,11 +811,8 @@ export default function SessionReplay({ sessionId }) {
 
                             {!renderGroups.length && !showAll && (
                                 <div className="rounded-xl border border-slate-900/60 bg-slate-900/70 px-4 py-3 text-xs text-slate-400">
-                                    No events near the current time. Try {" "}
-                                    <button
-                                        className="text-sky-400 underline"
-                                        onClick={() => setShowAll(true)}
-                                    >
+                                    No events near the current time. Try{" "}
+                                    <button className="text-sky-400 underline" onClick={() => setShowAll(true)}>
                                         showing all
                                     </button>
                                     .
