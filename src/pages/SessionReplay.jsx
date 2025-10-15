@@ -464,7 +464,7 @@ export default function SessionReplay({ sessionId }) {
     return (
         <div className="h-screen w-full overflow-hidden bg-slate-950 text-slate-100">
             <div className="grid h-full w-full grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
-                <section className="flex flex-col border-r border-slate-900/60 bg-slate-950/80 backdrop-blur">
+                <section className="flex min-h-0 flex-col border-r border-slate-900/60 bg-slate-950/80 backdrop-blur">
                     <div className="flex items-center justify-between border-b border-slate-900/60 px-6 py-4">
                         <div>
                             <h1 className="text-lg font-semibold tracking-tight">Session replay</h1>
@@ -489,8 +489,11 @@ export default function SessionReplay({ sessionId }) {
                         </div>
                     </div>
 
-                    <div className="relative flex-1 overflow-hidden">
-                        <div ref={containerRef} className="absolute inset-3 rounded-2xl border border-slate-900/40 bg-slate-900 shadow-lg" />
+                    <div className="relative flex-1 min-h-0 px-6 pb-6 pt-4">
+                        <div
+                            ref={containerRef}
+                            className="h-full w-full overflow-hidden rounded-2xl border border-slate-900/40 bg-slate-900/80 shadow-2xl"
+                        />
 
                         {playerStatus === "loading" && (
                             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -645,7 +648,7 @@ export default function SessionReplay({ sessionId }) {
                     </div>
                 </section>
 
-                <aside className="flex h-full flex-col bg-slate-950/95">
+                <aside className="flex h-full min-h-0 flex-col overflow-hidden bg-slate-950/95">
                     <div className="flex items-center justify-between border-b border-slate-900/60 px-6 py-4">
                         <div>
                             <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">Timeline</h2>
@@ -662,7 +665,7 @@ export default function SessionReplay({ sessionId }) {
                         </label>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto px-6 py-6">
+                    <div className="flex-1 overflow-y-auto px-6 py-6 min-h-0">
                         {playerStatus === "no-rrweb" && (
                             <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-100">
                                 No rrweb events (or too few to initialize) for this session.
