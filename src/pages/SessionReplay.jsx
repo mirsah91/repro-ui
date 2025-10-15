@@ -434,6 +434,16 @@ export default function SessionReplay({ sessionId }) {
         return markers;
     }, [ticks, playerMeta.totalTime, serverToRrwebOffsetMs]);
 
+    useEffect(() => {
+        setHoveredMarker((prev) => {
+            if (!prev) return null;
+            const next = timelineMarkers.find((m) => m.key === prev.key);
+            if (!next) return null;
+            if (prev.event === next.event && prev.position === next.position) return prev;
+            return next;
+        });
+    }, [timelineMarkers]);
+
     const updatePlayerSize = React.useCallback((tag = "manual") => {
         const rep = replayerRef.current;
         if (!rep) return;
@@ -534,6 +544,52 @@ export default function SessionReplay({ sessionId }) {
                 if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
             });
         }
+    }
+
+    function getMarkerTitle(ev) {
+        if (!ev) return "Event";
+        if (ev.kind === "action") return ev.label || ev.actionId || "Action";
+        if (ev.kind === "request") {
+            const parts = [ev.meta?.method, ev.meta?.url].filter(Boolean);
+            return parts.join(" ") || "Request";
+        }
+        if (ev.kind === "db") {
+            const parts = [ev.meta?.collection, ev.meta?.op].filter(Boolean);
+            return parts.join(" • ") || "Database event";
+        }
+        if (ev.kind === "email") return ev.meta?.subject || "Email";
+        return ev.label || ev.kind || "Event";
+    }
+
+    function getMarkerMeta(ev) {
+        if (!ev) return null;
+        if (ev.kind === "request") {
+            const status = ev.meta?.status ?? ev.meta?.statusCode;
+            const dur = ev.meta?.durMs ?? ev.meta?.durationMs;
+            const parts = [];
+            if (status != null) parts.push(`status ${status}`);
+            if (dur != null) parts.push(`${dur}ms`);
+            return parts.join(" • ") || null;
+        }
+        if (ev.kind === "db") {
+            const parts = [];
+            if (ev.meta?.op) parts.push(ev.meta.op);
+            if (typeof ev.meta?.durationMs === "number") parts.push(`${ev.meta.durationMs}ms`);
+            return parts.join(" • ") || null;
+        }
+        if (ev.kind === "action") {
+            if (typeof ev.tStart === "number" || typeof ev.tEnd === "number") {
+                return `[${ev.tStart ?? "—"} … ${ev.tEnd ?? "—"}]`;
+            }
+            return null;
+        }
+        if (ev.kind === "email") {
+            const parts = [];
+            if (ev.meta?.provider) parts.push(ev.meta.provider);
+            if (ev.meta?.statusCode != null) parts.push(String(ev.meta.statusCode));
+            return parts.join(" • ") || null;
+        }
+        return null;
     }
 
     const formatTime = (ms) => {
@@ -649,12 +705,60 @@ export default function SessionReplay({ sessionId }) {
                         </div>
 
                         <div className="relative h-20">
+                            {hoveredMarker && (
+                                <div
+                                    className="pointer-events-none absolute z-30 -translate-x-1/2 rounded-xl border border-slate-900/60 bg-slate-950/95 px-3 py-2 text-xs text-slate-200 shadow-2xl backdrop-blur"
+                                    style={{ left: `${hoverPosition}%`, bottom: "calc(50% + 24px)" }}
+                                >
+                                    <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.25em] text-slate-500">
+                                        <span className={`h-2 w-2 rounded-full ${KIND_COLORS[hoveredMarker.event.kind] || "bg-slate-500"}`} />
+                                        {hoveredMarker.event.kind}
+                                    </div>
+                                    <div className="mt-1 text-sm font-medium leading-snug text-slate-100 break-words">
+                                        {getMarkerTitle(hoveredMarker.event)}
+                                    </div>
+                                    {getMarkerMeta(hoveredMarker.event) && (
+                                        <div className="mt-1 text-[11px] uppercase tracking-[0.3em] text-slate-500">
+                                            {getMarkerMeta(hoveredMarker.event)}
+                                        </div>
+                                    )}
+                                    <div className="mt-1 text-[11px] text-slate-500">
+                                        {formatMaybeTime(alignedSeekMsFor(hoveredMarker.event))} rrweb • @{hoveredMarker.event._t ?? "—"}
+                                    </div>
+                                </div>
+                            )}
+
                             <div className="absolute inset-x-0 top-1/2 -translate-y-1/2">
-                                <div className="h-2 w-full rounded-full bg-slate-800/80">
+                                <div className="relative h-2 w-full rounded-full bg-slate-800/80">
                                     <div
-                                        className="h-full rounded-full bg-sky-500/70"
+                                        className="absolute inset-y-0 left-0 rounded-full bg-sky-500/70"
                                         style={{ width: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%` }}
                                     />
+
+                                    <div className="pointer-events-none absolute inset-0 z-20">
+                                        {timelineMarkers.map((marker) => {
+                                            const event = marker.event;
+                                            const isActive = activeEventId && event.__key === activeEventId;
+                                            const eventTime = alignedSeekMsFor(event);
+                                            const markerTitle = getMarkerTitle(event);
+                                            return (
+                                                <button
+                                                    key={marker.key || marker.position}
+                                                    type="button"
+                                                    className={`pointer-events-auto absolute top-1/2 h-3 w-3 -translate-y-1/2 -translate-x-1/2 rounded-full border border-slate-950/70 shadow transition focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 focus:ring-offset-slate-950 ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "scale-110 ring-2 ring-sky-400/80" : "hover:scale-110"}`}
+                                                    style={{ left: `${marker.position * 100}%` }}
+                                                    onClick={() => jumpToEvent(event)}
+                                                    onMouseEnter={() => setHoveredMarker(marker)}
+                                                    onMouseLeave={() => setHoveredMarker(null)}
+                                                    onFocus={() => setHoveredMarker(marker)}
+                                                    onBlur={() => setHoveredMarker(null)}
+                                                    title={`${event.kind || "event"} • ${markerTitle}${eventTime != null ? ` • ${formatMaybeTime(eventTime)}` : ""}`}
+                                                >
+                                                    <span className="sr-only">{markerTitle}</span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
                                 </div>
                                 <div
                                     className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-sky-400 bg-slate-950 shadow-[0_0_0_4px_rgba(56,189,248,0.15)] transition"
