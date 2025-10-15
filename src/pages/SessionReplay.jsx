@@ -157,6 +157,7 @@ export default function SessionReplay({ sessionId }) {
     const replayerRef = useRef(null);
     const rrwebZeroTsRef = useRef(null); // first rrweb event timestamp (epoch ms)
     const lastPausedTimeRef = useRef(0);
+    const lastPlayerSizeRef = useRef({ width: 0, height: 0 });
 
     const { status, queueRef, pullMore, doneRef } = useRrwebStream(sessionId);
     const rawTicks = useTimeline(sessionId); // backend events (server time)
@@ -292,14 +293,23 @@ export default function SessionReplay({ sessionId }) {
                         console.warn("unable to pause existing replayer", err);
                     }
                 }
+                const bounds = containerRef.current?.getBoundingClientRect();
+                const width = bounds?.width ? Math.floor(bounds.width) : undefined;
+                const height = bounds?.height ? Math.floor(bounds.height) : undefined;
+
                 const rep = new Replayer(initial, {
                     root: containerRef.current,
                     liveMode: false,
                     UNSAFE_replayCanvas: true,
                     speed: 1.0,
                     mouseTail: false,
+                    width,
+                    height,
                 });
                 replayerRef.current = rep;
+                if (width && height) {
+                    lastPlayerSizeRef.current = { width, height };
+                }
                 rep.play();
 
                 // keep current time in sync
@@ -318,6 +328,21 @@ export default function SessionReplay({ sessionId }) {
                 } catch (err) {
                     console.warn("failed to read initial rrweb metadata", err);
                 }
+
+                window.requestAnimationFrame(() => {
+                    if (cancelled) return;
+                    try {
+                        const rect = containerRef.current?.getBoundingClientRect();
+                        const nextWidth = rect?.width ? Math.floor(rect.width) : width;
+                        const nextHeight = rect?.height ? Math.floor(rect.height) : height;
+                        if (nextWidth && nextHeight) {
+                            lastPlayerSizeRef.current = { width: nextWidth, height: nextHeight };
+                            rep.setConfig?.({ width: nextWidth, height: nextHeight });
+                        }
+                    } catch (err) {
+                        console.warn("failed to apply initial replayer dimensions", err);
+                    }
+                });
 
                 // background feed: add events one-by-one (safer)
                 (async function feed() {
@@ -397,6 +422,46 @@ export default function SessionReplay({ sessionId }) {
 
         return markers;
     }, [ticks, playerMeta.totalTime, serverToRrwebOffsetMs]);
+
+    const updatePlayerSize = React.useCallback(() => {
+        const rep = replayerRef.current;
+        const container = containerRef.current;
+        if (!rep || !container) return;
+
+        const rect = container.getBoundingClientRect();
+        const width = rect?.width ? Math.floor(rect.width) : 0;
+        const height = rect?.height ? Math.floor(rect.height) : 0;
+        if (!width || !height) return;
+
+        const lastSize = lastPlayerSizeRef.current;
+        if (lastSize.width === width && lastSize.height === height) return;
+
+        lastPlayerSizeRef.current = { width, height };
+        try {
+            rep.setConfig?.({ width, height });
+        } catch (err) {
+            console.warn("unable to resize replayer", err);
+        }
+    }, []);
+
+    React.useLayoutEffect(() => {
+        const container = containerRef.current;
+        if (!container || typeof ResizeObserver === "undefined") {
+            updatePlayerSize();
+            return undefined;
+        }
+
+        const observer = new ResizeObserver(() => {
+            updatePlayerSize();
+        });
+
+        observer.observe(container);
+        updatePlayerSize();
+
+        return () => {
+            observer.disconnect();
+        };
+    }, [updatePlayerSize]);
 
     const hoverPosition = hoveredMarker ? Math.min(92, Math.max(8, hoveredMarker.position * 100)) : 0;
 
