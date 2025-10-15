@@ -511,6 +511,13 @@ export default function SessionReplay({ sessionId }) {
         email: "bg-fuchsia-400",
     };
 
+    const KIND_ICONS = {
+        action: "⚡",
+        request: "🌐",
+        db: "💾",
+        email: "✉️",
+    };
+
     function alignedSeekMsFor(ev) {
         const serverMs =
             (typeof ev._startServer === "number" && ev._startServer) ??
@@ -735,17 +742,18 @@ export default function SessionReplay({ sessionId }) {
                                         style={{ width: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%` }}
                                     />
 
-                                    <div className="pointer-events-none absolute inset-0 z-20">
+                                    <div className="pointer-events-none absolute inset-0 z-30">
                                         {timelineMarkers.map((marker) => {
                                             const event = marker.event;
                                             const isActive = activeEventId && event.__key === activeEventId;
                                             const eventTime = alignedSeekMsFor(event);
                                             const markerTitle = getMarkerTitle(event);
+                                            const markerIcon = KIND_ICONS[event.kind] || "•";
                                             return (
                                                 <button
                                                     key={marker.key || marker.position}
                                                     type="button"
-                                                    className={`pointer-events-auto absolute top-1/2 h-3 w-3 -translate-y-1/2 -translate-x-1/2 rounded-full border border-slate-950/70 shadow transition focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 focus:ring-offset-slate-950 ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "scale-110 ring-2 ring-sky-400/80" : "hover:scale-110"}`}
+                                                    className={`pointer-events-auto absolute top-1/2 flex h-5 w-5 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border border-slate-950/70 text-[11px] font-semibold text-slate-950 shadow transition focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 focus:ring-offset-slate-950 ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "scale-110 ring-2 ring-sky-400/80" : "hover:scale-110"}`}
                                                     style={{ left: `${marker.position * 100}%` }}
                                                     onClick={() => jumpToEvent(event)}
                                                     onMouseEnter={() => setHoveredMarker(marker)}
@@ -755,6 +763,7 @@ export default function SessionReplay({ sessionId }) {
                                                     title={`${event.kind || "event"} • ${markerTitle}${eventTime != null ? ` • ${formatMaybeTime(eventTime)}` : ""}`}
                                                 >
                                                     <span className="sr-only">{markerTitle}</span>
+                                                    <span aria-hidden>{markerIcon}</span>
                                                 </button>
                                             );
                                         })}
