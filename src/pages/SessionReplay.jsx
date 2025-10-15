@@ -293,9 +293,9 @@ export default function SessionReplay({ sessionId }) {
                         console.warn("unable to pause existing replayer", err);
                     }
                 }
-                const bounds = containerRef.current?.getBoundingClientRect();
-                const width = bounds?.width ? Math.floor(bounds.width) : undefined;
-                const height = bounds?.height ? Math.floor(bounds.height) : undefined;
+                const measured = measureContainerSize();
+                const width = measured?.width;
+                const height = measured?.height;
 
                 const rep = new Replayer(initial, {
                     root: containerRef.current,
@@ -331,17 +331,7 @@ export default function SessionReplay({ sessionId }) {
 
                 window.requestAnimationFrame(() => {
                     if (cancelled) return;
-                    try {
-                        const rect = containerRef.current?.getBoundingClientRect();
-                        const nextWidth = rect?.width ? Math.floor(rect.width) : width;
-                        const nextHeight = rect?.height ? Math.floor(rect.height) : height;
-                        if (nextWidth && nextHeight) {
-                            lastPlayerSizeRef.current = { width: nextWidth, height: nextHeight };
-                            rep.setConfig?.({ width: nextWidth, height: nextHeight });
-                        }
-                    } catch (err) {
-                        console.warn("failed to apply initial replayer dimensions", err);
-                    }
+                    updatePlayerSize();
                 });
 
                 // background feed: add events one-by-one (safer)
@@ -423,26 +413,43 @@ export default function SessionReplay({ sessionId }) {
         return markers;
     }, [ticks, playerMeta.totalTime, serverToRrwebOffsetMs]);
 
+    const measureContainerSize = React.useCallback(() => {
+        const container = containerRef.current;
+        if (!container) return null;
+
+        const clientWidth = container.clientWidth || container.offsetWidth;
+        const clientHeight = container.clientHeight || container.offsetHeight;
+
+        let width = Math.round(clientWidth || 0);
+        let height = Math.round(clientHeight || 0);
+
+        if (!width || !height) {
+            const rect = container.getBoundingClientRect();
+            width = Math.round(rect?.width || 0);
+            height = Math.round(rect?.height || 0);
+        }
+
+        if (!width || !height) return null;
+        return { width, height };
+    }, []);
+
     const updatePlayerSize = React.useCallback(() => {
         const rep = replayerRef.current;
-        const container = containerRef.current;
-        if (!rep || !container) return;
+        if (!rep) return;
 
-        const rect = container.getBoundingClientRect();
-        const width = rect?.width ? Math.floor(rect.width) : 0;
-        const height = rect?.height ? Math.floor(rect.height) : 0;
-        if (!width || !height) return;
+        const size = measureContainerSize();
+        if (!size) return;
 
         const lastSize = lastPlayerSizeRef.current;
-        if (lastSize.width === width && lastSize.height === height) return;
+        if (lastSize.width === size.width && lastSize.height === size.height) return;
 
-        lastPlayerSizeRef.current = { width, height };
+        lastPlayerSizeRef.current = size;
         try {
-            rep.setConfig?.({ width, height });
+            rep.setConfig?.({ width: size.width, height: size.height });
         } catch (err) {
             console.warn("unable to resize replayer", err);
         }
-    }, []);
+    }, [measureContainerSize]);
 
     React.useLayoutEffect(() => {
         const container = containerRef.current;
@@ -451,8 +458,33 @@ export default function SessionReplay({ sessionId }) {
             return undefined;
         }
 
-        const observer = new ResizeObserver(() => {
-            updatePlayerSize();
+        const observer = new ResizeObserver((entries) => {
+            if (!entries.length) {
+                updatePlayerSize();
+                return;
+            }
+
+            const entry = entries[0];
+            const boxSize = Array.isArray(entry.contentBoxSize)
+                ? entry.contentBoxSize[0]
+                : entry.contentBoxSize;
+            const width = boxSize?.inlineSize || entry.contentRect?.width;
+            const height = boxSize?.blockSize || entry.contentRect?.height;
+
+            if (width && height) {
+                const rounded = { width: Math.round(width), height: Math.round(height) };
+                const lastSize = lastPlayerSizeRef.current;
+                if (lastSize.width !== rounded.width || lastSize.height !== rounded.height) {
+                    lastPlayerSizeRef.current = rounded;
+                    try {
+                        replayerRef.current?.setConfig?.({ width: rounded.width, height: rounded.height });
+                    } catch (err) {
+                        console.warn("unable to resize replayer", err);
+                    }
+                }
+            } else {
+                updatePlayerSize();
+            }
         });
 
         observer.observe(container);
