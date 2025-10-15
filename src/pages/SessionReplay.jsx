@@ -4,6 +4,7 @@ import "rrweb/dist/rrweb.min.css";
 import useTimeline from "../hooks/useTimeline";
 import { decodeBase64JsonArray } from "../lib/rrwebDecode";
 import EmailItem from "../components/EmailItem.jsx";
+import PlayerTimeline from "../components/PlayerTimeline.jsx";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 const WINDOW_MS = 1500;
@@ -56,14 +57,6 @@ function groupByAction(items) {
     // sort groups by their first timestamp
     return Array.from(groups.values()).sort((a, b) => a.start - b.start);
 }
-
-// flatten grouped list back to a single array for rendering
-function flattenGrouped(groups) {
-    const out = [];
-    for (const g of groups) out.push(...g.items);
-    return out;
-}
-
 
 function useRrwebStream(sessionId) {
     const [meta, setMeta] = useState({ firstSeq: 0, lastSeq: 0 });
@@ -181,8 +174,10 @@ export default function SessionReplay({ sessionId }) {
         typeof serverMs === "number" ? (serverMs - (clockOffsetRef.current || 0)) : null;
 
     // normalize and sort ticks once
+    const rrwebZeroTs = rrwebZeroTsRef.current;
+
     const ticks = useMemo(() => {
-        const zero = rrwebZeroTsRef.current; // may be null until replay bootstraps
+        const zero = rrwebZeroTs; // may be null until replay bootstraps
         const out = [];
 
         for (const ev of rawTicks || []) {
@@ -215,7 +210,7 @@ export default function SessionReplay({ sessionId }) {
         });
 
         return out;
-    }, [rawTicks, rrwebZeroTsRef.current]);
+    }, [rawTicks, rrwebZeroTs]);
 
     // absolute rrweb "now" in SERVER epoch ms (or null if player not ready)
     const absNow = useMemo(() => {
@@ -271,7 +266,11 @@ export default function SessionReplay({ sessionId }) {
 
                 // init replayer
                 if (replayerRef.current) {
-                    try { replayerRef.current.pause(); } catch {}
+                    try {
+                        replayerRef.current.pause();
+                    } catch (err) {
+                        console.warn("failed to pause previous replayer", err);
+                    }
                 }
                 const rep = new Replayer(initial, {
                     root: containerRef.current,
@@ -288,7 +287,9 @@ export default function SessionReplay({ sessionId }) {
                     try {
                         const t = replayerRef.current?.getCurrentTime?.() ?? 0;
                         setCurrentTime(t);
-                    } catch {}
+                    } catch (err) {
+                        console.warn("failed to read current replay time", err);
+                    }
                 }, POLL_MS);
 
                 // background feed: add events one-by-one (safer)
@@ -299,13 +300,17 @@ export default function SessionReplay({ sessionId }) {
                         }
                         const batch = queueRef.current.splice(0, 50);
                         for (const ev of batch) {
-                            try { replayerRef.current.addEvent(ev); } catch {}
+                            try {
+                                replayerRef.current.addEvent(ev);
+                            } catch (err) {
+                                console.warn("failed to append rrweb event", err);
+                            }
                         }
                         await new Promise(r => setTimeout(r, 100));
                     }
                 })();
 
-                setPlayerStatus("ready");
+                setPlayerStatus("playing");
                 return () => window.clearInterval(interval);
             } catch (e) {
                 console.error("replay bootstrap error", e);
@@ -315,10 +320,15 @@ export default function SessionReplay({ sessionId }) {
 
         return () => {
             cancelled = true;
-            try { replayerRef.current?.pause(); } catch {}
+            try {
+                replayerRef.current?.pause();
+            } catch (err) {
+                console.warn("failed to dispose replayer", err);
+            }
             replayerRef.current = null;
         };
-    }, [status, /* do NOT include ticks here to avoid re-init loop */]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [status, pullMore, queueRef, doneRef]); // do NOT include `ticks` here to avoid re-initializing the rrweb player on every backend update.
 
     // if ticks arrive after rrweb started, (re)compute offset without reinitializing player
     useEffect(() => {
@@ -326,8 +336,19 @@ export default function SessionReplay({ sessionId }) {
         clockOffsetRef.current = ticks[0]._t - rrwebFirstTsRef.current;
     }, [ticks]);
 
-    const canPause = playerStatus === "playing" || playerStatus === 'ready'
-    const canPlay = playerStatus !== "playing" && playerStatus !== 'ready'
+    function getTotalDuration() {
+        const rep = replayerRef.current;
+        if (!rep || typeof rep.getMetaData !== "function") return 0;
+        try {
+            const meta = rep.getMetaData();
+            return typeof meta?.totalTime === "number" ? meta.totalTime : 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    const canPause = playerStatus === "playing" || playerStatus === "ready";
+    const canPlay = playerStatus !== "playing" && playerStatus !== "ready";
 
     function alignedSeekMsFor(ev) {
         // prefer start → end → point
@@ -340,7 +361,7 @@ export default function SessionReplay({ sessionId }) {
         const rrMs = serverToRrwebOffsetMs(serverMs);
         if (rrMs == null) return null;
 
-        const total = replayerRef.current?.getMetaData?.().totalTime ?? 0;
+        const total = getTotalDuration();
         return Math.max(0, Math.min(total || 0, rrMs));
     }
 
@@ -372,191 +393,214 @@ export default function SessionReplay({ sessionId }) {
         return Number.isFinite(virtual) ? Math.max(0, virtual) : null;
     }
 
+    const totalDuration = getTotalDuration();
+
+    const timelineMarkers = ticks
+        .map((event) => {
+            const aligned = alignedSeekMsFor(event);
+            if (aligned == null) return null;
+            return {
+                id: event.id ?? event.actionId ?? `${event.kind}-${event._t}`,
+                kind: event.kind,
+                position: aligned,
+                label: event.label || event.meta?.label || event.meta?.url || event.actionId,
+                meta: event.meta,
+                raw: event,
+            };
+        })
+        .filter(Boolean);
+
     return (
-        <div className="flex h-screen">
-            {/* left: rrweb player */}
-            <div className="flex-1 flex flex-col">
-                <div ref={containerRef} className="flex-1 bg-gray-50 border-b"/>
-                {/* Play / Pause */}
-                <button
-                    onClick={() => {
-                        const rep = replayerRef.current;
-                        if (!rep) return;
-
-                        if (canPlay) {
-                            // resume from last known paused time (or currentTime as fallback)
-                            const resumeAt =
-                                Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
-                                    ? lastPausedTimeRef.current
-                                    : (rep.getCurrentTime?.() ?? currentTime ?? 0);
-
-                            rep.play(resumeAt);
-                            setPlayerStatus("playing");
-                        } else {
-                            // capture current position before pausing
-                            const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
-                            lastPausedTimeRef.current = now;
-                            rep.pause();
-                            setPlayerStatus("paused");
-                        }
-                    }}
-                    className="px-3 py-1 border rounded bg-gray-100 text-sm text-black"
-                >
-                    {canPause ? "Pause" : "Play"}
-                </button>
-                {/* Restart */}
-                <button
-                    onClick={() => {
-                        const rep = replayerRef.current;
-                        if (!rep) return;
-                        rep.pause();
-                        lastPausedTimeRef.current = 0; // keep our ref in sync
-                        rep.play(0);                    // explicit restart
-                        setPlayerStatus("playing");
-                    }}
-                    className="px-3 py-1 border rounded bg-gray-100 text-sm text-black"
-                >
-                    Restart
-                </button>
-                {/* Seek bar */}
-                <input
-                    type="range"
-                    min={0}
-                    max={replayerRef.current?.getMetaData().totalTime ?? 0}
-                    value={currentTime}
-                    onChange={(e) => {
-                        const rep = replayerRef.current;
-                        const newTime = Number(e.target.value);
-                        if (!rep) return;
-
-                        rep.pause();
-                        lastPausedTimeRef.current = newTime; // sync pause position
-                        rep.play(newTime);                   // seek + play
-                        setPlayerStatus("playing");
-                        setCurrentTime(newTime);
-                    }}
-                    className="flex-1"
-                />
-                <div className="p-2 border-t text-sm text-gray-600">
-                    time: {Math.round(currentTime)} ms
-                    <span className="ml-4">status: {playerStatus}</span>
-                </div>
-            </div>
-
-            {/* right: backend sidebar */}
-            <div className="w-[28rem] min-w-[22rem] max-w-[32rem] border-l p-3 overflow-auto">
-                <div className="flex items-center justify-between mb-2">
-                    <div className="font-semibold">
-                        backend events {showAll ? "(all)" : `near ${Math.round(currentTime)}ms`}
+        <div className="h-screen w-full bg-slate-100/70">
+            <div className="grid h-full grid-cols-[minmax(0,2.15fr)_minmax(320px,1fr)] backdrop-blur-sm">
+                {/* left: rrweb player */}
+                <div className="flex flex-col overflow-hidden border-r border-slate-200 bg-white/90">
+                    <div className="relative flex-1 overflow-hidden bg-slate-900/90">
+                        <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.18),_transparent_60%)]" />
+                        <div ref={containerRef} className="absolute inset-0" />
+                        <div className="pointer-events-none absolute inset-0 border-b border-white/10 shadow-inner" />
                     </div>
-                    <label className="text-xs flex items-center gap-2">
-                    <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)}/>
-                        show all
-                    </label>
+                    <div className="border-t border-slate-200 bg-white/70 p-6">
+                        <div className="flex items-center gap-3">
+                            <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                {playerStatus}
+                            </div>
+                            <div className="ml-auto flex items-center gap-2">
+                                <button
+                                    onClick={() => {
+                                        const rep = replayerRef.current;
+                                        if (!rep) return;
+
+                                        if (canPlay) {
+                                            const resumeAt =
+                                                Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
+                                                    ? lastPausedTimeRef.current
+                                                    : (rep.getCurrentTime?.() ?? currentTime ?? 0);
+
+                                            rep.play(resumeAt);
+                                            setPlayerStatus("playing");
+                                        } else {
+                                            const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
+                                            lastPausedTimeRef.current = now;
+                                            rep.pause();
+                                            setPlayerStatus("paused");
+                                        }
+                                    }}
+                                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                                >
+                                    {canPause ? "Pause" : "Play"}
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        const rep = replayerRef.current;
+                                        if (!rep) return;
+                                        rep.pause();
+                                        lastPausedTimeRef.current = 0;
+                                        rep.play(0);
+                                        setPlayerStatus("playing");
+                                    }}
+                                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                                >
+                                    Restart
+                                </button>
+                            </div>
+                        </div>
+                        <div className="mt-6">
+                            <PlayerTimeline
+                                currentTime={currentTime}
+                                totalTime={totalDuration}
+                                markers={timelineMarkers}
+                                onSeek={(next) => {
+                                    const rep = replayerRef.current;
+                                    if (!rep) return;
+
+                                    rep.pause();
+                                    lastPausedTimeRef.current = next;
+                                    rep.play(next);
+                                    setPlayerStatus("playing");
+                                    setCurrentTime(next);
+                                }}
+                                onMarkerSelect={(marker) => {
+                                    if (marker?.raw) {
+                                        jumpToEvent(marker.raw);
+                                    }
+                                }}
+                            />
+                        </div>
+                    </div>
                 </div>
 
-                {playerStatus === "no-rrweb" && (
-                    <div className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded p-2 mb-3">
-                        no rrweb events (or too few to initialize) for this session.
+                {/* right: backend timeline */}
+                <div className="flex h-full flex-col overflow-hidden bg-slate-50/80">
+                    <div className="flex items-center justify-between border-b border-slate-200 bg-white/60 px-6 py-4 backdrop-blur">
+                        <div>
+                            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Backend events</div>
+                            <div className="text-base font-semibold text-slate-900">
+                                {showAll ? "All events" : `Focused around ${Math.round(currentTime)}ms`}
+                            </div>
+                        </div>
+                        <label className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 shadow-sm">
+                            <input
+                                type="checkbox"
+                                checked={showAll}
+                                onChange={(e) => setShowAll(e.target.checked)}
+                                className="h-3.5 w-3.5 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+                            />
+                            show all
+                        </label>
                     </div>
-                )}
+                    <div className="flex-1 overflow-y-auto px-6 py-4">
+                        {playerStatus === "no-rrweb" && (
+                            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 shadow-sm">
+                                no rrweb events (or too few to initialize) for this session.
+                            </div>
+                        )}
 
-                {!ticks.length && (
-                    <div className="text-xs text-gray-500 mb-2">
-                        no backend timeline data for this session.
-                    </div>
-                )}
+                        {!ticks.length && (
+                            <div className="text-xs text-slate-500">no backend timeline data for this session.</div>
+                        )}
 
-                <ul className="space-y-2">
-                    <ul className="space-y-3">
-                        {renderGroups.map((g, gi) => (
-                            <li key={g.id || gi} className="rounded border p-2">
-                                {/* Group header: show the Action label if present, else a generic tag */}
-                                {(() => {
-                                    const action = g.items.find(it => it.kind === "action");
-                                    const title = action?.label || action?.actionId || "Other events";
-                                    const win = action
-                                        ? `[${action.tStart ?? "—"} … ${action.tEnd ?? "—"}]`
-                                        : "";
-                                    return (
-                                        <div className="mb-2">
-                                            <div className="text-xs font-semibold text-gray-700">
-                                                {title} {win && <span className="ml-2 text-gray-500">{win}</span>}
-                                            </div>
-                                        </div>
-                                    );
-                                })()}
-
-                                {/* Group items in rank order (already sorted by groupByAction) */}
-                                <div className="space-y-2">
-                                    {g.items.map((e, i) => {
-                                        const aligned = toRrwebTime(e._t);
+                        <ul className="space-y-4">
+                            {renderGroups.map((g, gi) => (
+                                <li key={g.id || gi} className="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm transition hover:border-slate-300">
+                                    {(() => {
+                                        const action = g.items.find(it => it.kind === "action");
+                                        const title = action?.label || action?.actionId || "Other events";
+                                        const win = action ? `[${action.tStart ?? "—"} … ${action.tEnd ?? "—"}]` : "";
                                         return (
-                                            <div
-                                                key={i}
-                                                role="button"
-                                                tabIndex={0}
-                                                onClick={() => jumpToEvent(e)}
-                                                onKeyDown={(k) => (k.key === "Enter" || k.key === " ") && jumpToEvent(e)}
-                                                className="rounded border p-2 cursor-pointer hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
-                                            >
-                                                <div className="text-xs text-gray-500">
-                                                    {e.kind} @ {e._t} (aligned
-                                                    ~ {typeof aligned === "number" ? Math.round(aligned) : "—"}ms)
-                                                </div>
-
-                                                {e.kind === "request" && (
-                                                    <div className="text-sm">
-                                                        <div className="font-mono break-all">
-                                                            {e.meta?.method} {e.meta?.url}
-                                                        </div>
-                                                        <div className="text-gray-600">
-                                                            status {e.meta?.status} • {e.meta?.durMs}ms
-                                                        </div>
-                                                    </div>
-                                                )}
-                                                {e.kind === "db" && (
-                                                    <div className="text-sm">
-                                                        <div
-                                                            className="font-mono">{e.meta?.collection} • {e.meta?.op}</div>
-                                                        {e.meta?.query && (
-                                                            <pre
-                                                                className="text-[11px] bg-black-50 rounded p-1 overflow-auto">
-                                                                {JSON.stringify(e.meta.query, null, 2)}
-                                                            </pre>
-                                                        )}
-                                                        {e.meta?.resultMeta && (
-                                                            <div className="text-gray-600 text-xs">
-                                                                result {JSON.stringify(e.meta.resultMeta)}
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )}
-                                                {e.kind === "action" && (
-                                                    <div className="text-sm">
-                                                        <div className="font-mono break-all">{e.label || e.actionId}</div>
-                                                        {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
-                                                            <div className="text-gray-600 text-xs">
-                                                                [{e.tStart ?? "—"} … {e.tEnd ?? "—"}]
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )}
-                                                {e.kind === "email" && <EmailItem meta={e.meta} />}
+                                            <div className="mb-3 flex items-center justify-between gap-3">
+                                                <div className="text-sm font-semibold text-slate-900">{title}</div>
+                                                {win && <div className="text-[11px] font-mono text-slate-400">{win}</div>}
                                             </div>
                                         );
-                                    })}
-                                </div>
-                            </li>
-                        ))}
-                        {!renderGroups.length && !showAll && (
-                            <li className="text-xs text-gray-500">
-                                no events near the current time. Try{" "}
-                                <button className="underline" onClick={() => setShowAll(true)}>show all</button>.
-                            </li>
-                        )}
-                    </ul>
-                </ul>
+                                    })()}
+
+                                    <div className="space-y-3">
+                                        {g.items.map((e, i) => {
+                                            const aligned = toRrwebTime(e._t);
+                                            return (
+                                                <div
+                                                    key={i}
+                                                    role="button"
+                                                    tabIndex={0}
+                                                    onClick={() => jumpToEvent(e)}
+                                                    onKeyDown={(k) => (k.key === "Enter" || k.key === " ") && jumpToEvent(e)}
+                                                    className="group rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                                                >
+                                                    <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-wide text-slate-400">
+                                                        <span>{e.kind}</span>
+                                                        <span className="font-mono text-slate-500">{typeof aligned === "number" ? `${Math.round(aligned)}ms` : "—"}</span>
+                                                    </div>
+
+                                                    {e.kind === "request" && (
+                                                        <div className="space-y-1 text-sm">
+                                                            <div className="font-mono text-xs text-slate-900 break-words">
+                                                                {e.meta?.method} {e.meta?.url}
+                                                            </div>
+                                                            <div className="text-xs text-slate-500">
+                                                                status {e.meta?.status} • {e.meta?.durMs}ms
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    {e.kind === "db" && (
+                                                        <div className="space-y-1 text-sm">
+                                                            <div className="font-mono text-xs text-slate-900">{e.meta?.collection} • {e.meta?.op}</div>
+                                                            {e.meta?.query && (
+                                                                <pre className="max-h-32 overflow-auto rounded-lg bg-slate-900/90 p-2 text-[11px] text-slate-100 shadow-inner">
+                                                                    {JSON.stringify(e.meta.query, null, 2)}
+                                                                </pre>
+                                                            )}
+                                                            {e.meta?.resultMeta && (
+                                                                <div className="text-xs text-slate-500">
+                                                                    result {JSON.stringify(e.meta.resultMeta)}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    {e.kind === "action" && (
+                                                        <div className="space-y-1 text-sm">
+                                                            <div className="font-mono text-xs text-slate-900 break-words">{e.label || e.actionId}</div>
+                                                            {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
+                                                                <div className="text-xs text-slate-500">[{e.tStart ?? "—"} … {e.tEnd ?? "—"}]</div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    {e.kind === "email" && <EmailItem meta={e.meta} />}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </li>
+                            ))}
+                            {!renderGroups.length && !showAll && (
+                                <li className="text-xs text-slate-500">
+                                    no events near the current time. Try{" "}
+                                    <button className="font-semibold text-slate-700 underline" onClick={() => setShowAll(true)}>show all</button>.
+                                </li>
+                            )}
+                        </ul>
+                    </div>
+                </div>
             </div>
         </div>
     );
