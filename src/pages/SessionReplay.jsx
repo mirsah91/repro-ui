@@ -368,9 +368,16 @@ export default function SessionReplay({ sessionId }) {
             try {
                 setPlayerStatus("loading");
 
-                while (queueRef.current.length < 2 && !doneRef.current) {
-                    await pullMore(10);
+                let pulls = 0;
+                while (!doneRef.current) {
+                    await pullMore(100);
+                    pulls += 1;
+                    if (pulls > 500) {
+                        warn("prefetch guard break", { pulls, queued: queueRef.current.length, done: doneRef.current });
+                        break;
+                    }
                 }
+
                 const initial = queueRef.current.splice(0, queueRef.current.length);
                 if (!initial.length) { setPlayerStatus("no-rrweb"); return; }
 
