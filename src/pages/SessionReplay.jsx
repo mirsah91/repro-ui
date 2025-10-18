@@ -213,8 +213,9 @@ export default function SessionReplay({ sessionId }) {
         const cont = measureContainerSize();
         const intrinsic = measureIframeContentSize();
         const iframe = findIframe();
-        if (!cont || !intrinsic || !iframe) {
-            warn(`${tag}: missing sizes`, { cont, intrinsic, hasIframe: !!iframe });
+        const wrapper = iframe?.parentElement;
+        if (!cont || !intrinsic || !iframe || !wrapper) {
+            warn(`${tag}: missing sizes`, { cont, intrinsic, hasIframe: !!iframe, hasWrapper: !!wrapper });
             return;
         }
 
@@ -222,26 +223,26 @@ export default function SessionReplay({ sessionId }) {
         const scaledW = Math.round(intrinsic.width * scale);
         const scaledH = Math.round(intrinsic.height * scale);
 
-        // iframe intrinsic size + scale
+        // ensure iframe keeps intrinsic size while the wrapper handles scaling
         iframe.style.width = `${intrinsic.width}px`;
         iframe.style.height = `${intrinsic.height}px`;
         iframe.setAttribute("width", String(intrinsic.width));
         iframe.setAttribute("height", String(intrinsic.height));
-        iframe.style.transform = `scale(${scale})`;
-        iframe.style.transformOrigin = "top left";
+        iframe.style.transform = "";
+        iframe.style.transformOrigin = "";
         iframe.style.display = "block";
 
-        // reserve scaled space on wrapper (rrweb root parent of iframe)
-        const wrapper = iframe.parentElement;
-        if (wrapper) {
-            wrapper.style.width = `${scaledW}px`;
-            wrapper.style.height = `${scaledH}px`;
-            wrapper.style.overflow = "hidden";
-        }
+        wrapper.style.width = `${intrinsic.width}px`;
+        wrapper.style.height = `${intrinsic.height}px`;
+        wrapper.style.transform = scale === 1 ? "" : `scale(${scale})`;
+        wrapper.style.transformOrigin = "top left";
+        wrapper.style.overflow = "hidden";
 
-        // container should hide overflow as well
+        // container should hide overflow as well but keep its measured size
         const root = containerRef.current;
-        if (root) root.style.overflow = "hidden";
+        if (root) {
+            root.style.overflow = "hidden";
+        }
 
         log(`${tag}: applyFitContain`, { container: cont, intrinsic, scale, scaled: { w: scaledW, h: scaledH } });
     }, [findIframe, measureContainerSize, measureIframeContentSize]);
@@ -708,13 +709,6 @@ export default function SessionReplay({ sessionId }) {
                                 className="inline-flex items-center gap-2 rounded-full border border-slate-800/60 bg-slate-900 px-4 py-2 text-xs uppercase tracking-[0.2em] text-slate-400 transition hover:border-slate-700 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
                             >
                                 Restart
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => applyFitContain("manual-fit")}
-                                className="ml-2 inline-flex items-center gap-2 rounded-full border border-slate-800/60 bg-slate-900 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-400"
-                            >
-                                Refit Now (log)
                             </button>
                             <div className="ml-auto text-xs text-slate-400">
                                 {playerStatus === "paused" ? "paused" : "live"}

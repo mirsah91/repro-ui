@@ -437,7 +437,6 @@ function TraceGraphView({ graph }) {
 
   const instanceRef = useRef(null);
   const onInit = useCallback((inst) => { instanceRef.current = inst; }, []);
-  const fitAll = useCallback(() => instanceRef.current?.fitView({ padding: 0.15, duration: 500 }), []);
 
   const focusNode = useCallback((id) => {
     const node = localNodes.find((n) => n.id === id);
@@ -499,7 +498,6 @@ function TraceGraphView({ graph }) {
         const input = wrapperRef.current?.querySelector(".graph-find-input");
         if (input) { ev.preventDefault(); input.focus(); input.select(); }
       }
-      if ((ev.key === "f" || ev.key === "F") && !ev.metaKey && !ev.ctrlKey && !ev.altKey) { ev.preventDefault(); fitAll(); }
       if (ev.key === "Escape") {
         setFocusedId(null);
         setLocalNodes((prev) => prev.map((n) => ({ ...n, className: (n.className || "").replace(/\bis-focused\b/g, "").trim() })));
@@ -513,7 +511,7 @@ function TraceGraphView({ graph }) {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onFind, fitAll, goToComponent, compIndex]);
+  }, [onFind, goToComponent, compIndex]);
 
   const isLight = theme === "light";
   const wrapperBg = isLight ? "#ffffff" : "#0e1116";
@@ -537,7 +535,6 @@ function TraceGraphView({ graph }) {
                    outline: "none", background: isLight ? "rgba(255,255,255,0.9)" : "rgba(0,0,0,0.2)",
                    color: isLight ? "#111" : "white", padding: "6px 10px", borderRadius: 8, minWidth: 280 }} />
           <button type="submit" title="Jump to first match (Enter)" style={btnStyle(isLight)}>Jump</button>
-          <button type="button" onClick={fitAll} title="Fit to view (f)" style={btnStyle(isLight)}>Fit</button>
           <button type="button" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
                   title="Toggle background" style={btnStyle(isLight)}>
             {isLight ? "Dark" : "Light"}
@@ -645,18 +642,22 @@ export function FunctionTraceViewer({ trace = [], title = "Function trace" }) {
               <span>🔍</span>
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by function or file" />
             </div>
-            <label className="toggle">
-              <input type="checkbox" checked={compact} onChange={(e) => setCompact(e.target.checked)} />
-              <span>Compact view</span>
-            </label>
+            {viewMode === "structured" && (
+              <label className="toggle">
+                <input type="checkbox" checked={compact} onChange={(e) => setCompact(e.target.checked)} />
+                <span>Compact view</span>
+              </label>
+            )}
             <label className="toggle">
               <input type="checkbox" checked={hideEvents} onChange={(e) => setHideEvents(e.target.checked)} />
               <span>Hide event-only</span>
             </label>
-            <label className="toggle">
-              <input type="checkbox" checked={showFull} onChange={(e) => setShowFull(e.target.checked)} />
-              <span>Show full values</span>
-            </label>
+            {viewMode === "structured" && (
+              <label className="toggle">
+                <input type="checkbox" checked={showFull} onChange={(e) => setShowFull(e.target.checked)} />
+                <span>Show full values</span>
+              </label>
+            )}
           </div>
         </div>
 
