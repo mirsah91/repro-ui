@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Replayer } from "rrweb";
+import { Replayer, ReplayerEvents } from "rrweb";
 import "rrweb/dist/rrweb.min.css";
 import useTimeline from "../hooks/useTimeline";
 import { decodeBase64JsonArray } from "../lib/rrwebDecode";
@@ -46,6 +46,20 @@ function groupByAction(items) {
         });
     }
     return Array.from(groups.values()).sort((a, b) => a.start - b.start);
+}
+
+function extractViewportFromEvents(events) {
+    if (!Array.isArray(events)) return null;
+    for (let i = events.length - 1; i >= 0; i--) {
+        const ev = events[i];
+        const data = ev?.data;
+        if (ev?.type === 4 && data && typeof data.width === "number" && typeof data.height === "number") {
+            const width = Math.round(data.width);
+            const height = Math.round(data.height);
+            if (width > 0 && height > 0) return { width, height };
+        }
+    }
+    return null;
 }
 
 function useRrwebStream(sessionId) {
@@ -131,6 +145,7 @@ export default function SessionReplay({ sessionId }) {
     const rrwebZeroTsRef = useRef(null);
     const lastPausedTimeRef = useRef(0);
     const lastPlayerSizeRef = useRef({ width: 0, height: 0 });
+    const viewportSizeRef = useRef(null);
 
     const { status, queueRef, pullMore, doneRef } = useRrwebStream(sessionId);
     const rawTicks = useTimeline(sessionId);
@@ -182,7 +197,7 @@ export default function SessionReplay({ sessionId }) {
         return root.querySelector("iframe");
     }, []);
 
-    const measureIframeContentSize = React.useCallback(() => {
+    const measureIframeContentSizeRaw = React.useCallback(() => {
         const iframe = findIframe();
         if (!iframe) return null;
         try {
@@ -201,21 +216,45 @@ export default function SessionReplay({ sessionId }) {
             const h = innerH || clientH || scrollH || 0;
 
             const size = { width: Math.round(w), height: Math.round(h) };
-            log("measureIframeContentSize", { innerW, innerH, clientW, clientH, scrollW, scrollH, pick: size });
+            log("measureIframeContentSizeRaw", { innerW, innerH, clientW, clientH, scrollW, scrollH, pick: size });
             return size.width && size.height ? size : null;
         } catch (e) {
-            warn("measureIframeContentSize failed", e);
+            warn("measureIframeContentSizeRaw failed", e);
             return null;
         }
     }, [findIframe]);
 
+    const getIntrinsicContentSize = React.useCallback(() => {
+        const recorded = viewportSizeRef.current;
+        const raw = measureIframeContentSizeRaw();
+        if (raw && recorded) {
+            const width = Math.max(raw.width || 0, recorded.width || 0);
+            const height = Math.max(raw.height || 0, recorded.height || 0);
+            const merged = { width: Math.round(width), height: Math.round(height) };
+            return merged.width && merged.height ? merged : null;
+        }
+        if (raw) return raw;
+        if (recorded && recorded.width && recorded.height) {
+            return { width: Math.round(recorded.width), height: Math.round(recorded.height) };
+        }
+        return null;
+    }, [measureIframeContentSizeRaw]);
+
     const applyFitContain = React.useCallback((tag = "fit") => {
         const cont = measureContainerSize();
-        const intrinsic = measureIframeContentSize();
+        const intrinsic = getIntrinsicContentSize();
         const iframe = findIframe();
         const wrapper = iframe?.parentElement;
-        if (!cont || !intrinsic || !iframe || !wrapper) {
-            warn(`${tag}: missing sizes`, { cont, intrinsic, hasIframe: !!iframe, hasWrapper: !!wrapper });
+        if (!cont || !iframe || !wrapper) {
+            warn(`${tag}: missing host`, { cont, hasIframe: !!iframe, hasWrapper: !!wrapper });
+            return;
+        }
+        if (!intrinsic) {
+            warn(`${tag}: missing intrinsic size`, { cont });
+            return;
+        }
+        if (!intrinsic.width || !intrinsic.height) {
+            warn(`${tag}: invalid intrinsic`, { intrinsic });
             return;
         }
 
@@ -244,8 +283,13 @@ export default function SessionReplay({ sessionId }) {
             root.style.overflow = "hidden";
         }
 
-        log(`${tag}: applyFitContain`, { container: cont, intrinsic, scale, scaled: { w: scaledW, h: scaledH } });
-    }, [findIframe, measureContainerSize, measureIframeContentSize]);
+        log(`${tag}: applyFitContain`, {
+            container: cont,
+            intrinsic,
+            scale,
+            scaled: { w: scaledW, h: scaledH },
+        });
+    }, [findIframe, getIntrinsicContentSize, measureContainerSize]);
 
     // ---- alignment helpers ----
     const serverToRrwebOffsetMs = React.useCallback((serverMs) => {
@@ -308,10 +352,13 @@ export default function SessionReplay({ sessionId }) {
     useEffect(() => {
         if (status !== "ready" || !containerRef.current || replayerRef.current) return;
 
+        viewportSizeRef.current = null;
+
         let cancelled = false;
         let mo = null;
         let viewportProbe = null;
         let mismatchSentinel = null;
+        let detachResize = null;
 
         (async () => {
             try {
@@ -326,6 +373,12 @@ export default function SessionReplay({ sessionId }) {
                 rrwebZeroTsRef.current = initial[0]?.timestamp || null;
                 rrwebFirstTsRef.current = initial[0]?.timestamp || null;
 
+                const recordedViewport = extractViewportFromEvents(initial);
+                if (recordedViewport) {
+                    viewportSizeRef.current = recordedViewport;
+                    log("initial viewport", recordedViewport);
+                }
+
                 if (rrwebFirstTsRef.current && ticks.length) {
                     clockOffsetRef.current = ticks[0]._t - rrwebFirstTsRef.current;
                 } else {
@@ -337,17 +390,41 @@ export default function SessionReplay({ sessionId }) {
                 if (!measured) { setPlayerStatus("error"); warn("no measured size"); return; }
                 log("init measured size", measured);
 
+                const intrinsicViewport = viewportSizeRef.current;
+                const initialViewport =
+                    intrinsicViewport && intrinsicViewport.width && intrinsicViewport.height
+                        ? intrinsicViewport
+                        : measured;
+
                 const rep = new Replayer(initial, {
                     root: containerRef.current,
                     liveMode: false,
                     UNSAFE_replayCanvas: true,
                     speed: 1.0,
                     mouseTail: false,
-                    width: measured.width,
-                    height: measured.height,
+                    width: initialViewport.width,
+                    height: initialViewport.height,
                 });
                 replayerRef.current = rep;
-                lastPlayerSizeRef.current = { ...measured };
+                lastPlayerSizeRef.current = { ...initialViewport };
+
+                const handleViewportResize = (dimension) => {
+                    if (!dimension) return;
+                    const width = Math.round(Number(dimension.width) || 0);
+                    const height = Math.round(Number(dimension.height) || 0);
+                    if (!width || !height) return;
+                    const prev = viewportSizeRef.current;
+                    viewportSizeRef.current = { width, height };
+                    if (!prev || prev.width !== width || prev.height !== height) {
+                        log("rrweb resize", viewportSizeRef.current);
+                    }
+                    requestAnimationFrame(() => applyFitContain("rrweb-resize"));
+                };
+                rep.on(ReplayerEvents.Resize, handleViewportResize);
+                detachResize = () => {
+                    try { rep.off(ReplayerEvents.Resize, handleViewportResize); }
+                    catch (err) { warn("detach resize failed", err); }
+                };
 
                 // Observe iframe insertion -> first fit
                 mo = new MutationObserver(() => {
@@ -401,7 +478,7 @@ export default function SessionReplay({ sessionId }) {
                     const iframe = findIframe();
                     if (!iframe) return;
                     const cont = measureContainerSize();
-                    const intrinsic = measureIframeContentSize();
+                    const intrinsic = getIntrinsicContentSize();
                     if (!cont || !intrinsic) return;
                     const scale = Math.min(cont.width / intrinsic.width, cont.height / intrinsic.height, 1);
                     const rect = iframe.getBoundingClientRect();
@@ -429,6 +506,8 @@ export default function SessionReplay({ sessionId }) {
             if (mo) mo.disconnect();
             if (viewportProbe) clearInterval(viewportProbe);
             if (mismatchSentinel) clearInterval(mismatchSentinel);
+            if (detachResize) detachResize();
+            viewportSizeRef.current = null;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [status]);
