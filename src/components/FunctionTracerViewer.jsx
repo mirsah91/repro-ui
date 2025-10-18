@@ -404,7 +404,7 @@ const btnStyle = (isLight) => ({
   cursor: "pointer"
 });
 
-function TraceGraphView({ graph }) {
+function TraceGraphView({ graph, searchTerm = "" }) {
   const wrapperRef = useRef(null);
   const [ready, setReady] = useState(false);
   const [localNodes, setLocalNodes] = useState(graph.nodes);
@@ -412,7 +412,6 @@ function TraceGraphView({ graph }) {
   const [components, setComponents] = useState(graph.components || []);
   const [focusedId, setFocusedId] = useState(null);
   const [compIndex, setCompIndex] = useState(0);
-  const [q, setQ] = useState("");
   const [theme, setTheme] = useState("light");
   const [autoFocused, setAutoFocused] = useState(false);
 
@@ -475,7 +474,7 @@ function TraceGraphView({ graph }) {
 
   const onFind = useCallback((e) => {
     e?.preventDefault?.();
-    const needle = q.trim().toLowerCase();
+    const needle = searchTerm.trim().toLowerCase();
     if (!needle) return;
     const scored = localNodes
         .map((n) => {
@@ -491,22 +490,14 @@ function TraceGraphView({ graph }) {
         .filter((r) => r.score > 0)
         .sort((a, b) => b.score - a.score);
     if (scored.length) focusNode(scored[0].id);
-  }, [q, localNodes, focusNode]);
+  }, [searchTerm, localNodes, focusNode]);
 
   useEffect(() => {
     const onKey = (ev) => {
-      if (ev.key === "/" && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
-        const input = wrapperRef.current?.querySelector(".graph-find-input");
-        if (input) { ev.preventDefault(); input.focus(); input.select(); }
-      }
       if ((ev.key === "f" || ev.key === "F") && !ev.metaKey && !ev.ctrlKey && !ev.altKey) { ev.preventDefault(); fitAll(); }
       if (ev.key === "Escape") {
         setFocusedId(null);
         setLocalNodes((prev) => prev.map((n) => ({ ...n, className: (n.className || "").replace(/\bis-focused\b/g, "").trim() })));
-      }
-      if (ev.key === "Enter") {
-        const active = document.activeElement;
-        if (active && active.classList.contains("graph-find-input")) onFind();
       }
       if (ev.key === "ArrowRight" && !ev.metaKey && !ev.ctrlKey && !ev.altKey) goToComponent(compIndex + 1);
       if (ev.key === "ArrowLeft" && !ev.metaKey && !ev.ctrlKey && !ev.altKey) goToComponent(compIndex - 1);
@@ -521,6 +512,19 @@ function TraceGraphView({ graph }) {
   const maskColor = isLight ? "rgba(255,255,255,0.86)" : "rgba(7, 9, 12, 0.86)";
   const miniMapNodeColor = (node) =>
       node.data?.isEvent ? (isLight ? "#6c79ff" : "#8f9eff") : (isLight ? "#2f77d1" : "#5ab0ff");
+  const hasSearchTerm = searchTerm.trim().length > 0;
+
+  useEffect(() => {
+    if (!hasSearchTerm) return;
+    let frame = requestAnimationFrame(() => onFind());
+    return () => cancelAnimationFrame(frame);
+  }, [hasSearchTerm, onFind]);
+
+  useEffect(() => {
+    if (hasSearchTerm) return;
+    setFocusedId(null);
+    setLocalNodes((prev) => prev.map((n) => ({ ...n, className: (n.className || "").replace(/\bis-focused\b/g, "").trim() })));
+  }, [hasSearchTerm]);
 
   return (
       <div ref={wrapperRef} className="trace-graph-wrapper"
@@ -531,12 +535,11 @@ function TraceGraphView({ graph }) {
           borderRadius: 12, padding: "6px 8px",
           border: isLight ? "1px solid rgba(0,0,0,0.08)" : "1px solid rgba(255,255,255,0.12)"
         }}>
-          <input className="graph-find-input" value={q} onChange={(e) => setQ(e.target.value)}
-                 placeholder="Find node by function or file (press /)"
-                 style={{ border: isLight ? "1px solid rgba(0,0,0,0.12)" : "1px solid rgba(255,255,255,0.16)",
-                   outline: "none", background: isLight ? "rgba(255,255,255,0.9)" : "rgba(0,0,0,0.2)",
-                   color: isLight ? "#111" : "white", padding: "6px 10px", borderRadius: 8, minWidth: 280 }} />
-          <button type="submit" title="Jump to first match (Enter)" style={btnStyle(isLight)}>Jump</button>
+          <button type="submit" title="Jump to first match" disabled={!hasSearchTerm} style={{
+            ...btnStyle(isLight),
+            opacity: hasSearchTerm ? 1 : 0.5,
+            cursor: hasSearchTerm ? "pointer" : "not-allowed"
+          }}>Jump</button>
           <button type="button" onClick={fitAll} title="Fit to view (f)" style={btnStyle(isLight)}>Fit</button>
           <button type="button" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
                   title="Toggle background" style={btnStyle(isLight)}>
@@ -645,18 +648,22 @@ export function FunctionTraceViewer({ trace = [], title = "Function trace" }) {
               <span>🔍</span>
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by function or file" />
             </div>
-            <label className="toggle">
-              <input type="checkbox" checked={compact} onChange={(e) => setCompact(e.target.checked)} />
-              <span>Compact view</span>
-            </label>
+            {viewMode === "structured" && (
+              <label className="toggle">
+                <input type="checkbox" checked={compact} onChange={(e) => setCompact(e.target.checked)} />
+                <span>Compact view</span>
+              </label>
+            )}
             <label className="toggle">
               <input type="checkbox" checked={hideEvents} onChange={(e) => setHideEvents(e.target.checked)} />
               <span>Hide event-only</span>
             </label>
-            <label className="toggle">
-              <input type="checkbox" checked={showFull} onChange={(e) => setShowFull(e.target.checked)} />
-              <span>Show full values</span>
-            </label>
+            {viewMode === "structured" && (
+              <label className="toggle">
+                <input type="checkbox" checked={showFull} onChange={(e) => setShowFull(e.target.checked)} />
+                <span>Show full values</span>
+              </label>
+            )}
           </div>
         </div>
 
@@ -686,7 +693,7 @@ export function FunctionTraceViewer({ trace = [], title = "Function trace" }) {
               )
           ) : (
               <div style={{ height: "70vh" }}>
-                <TraceGraphView graph={graph} />
+                <TraceGraphView graph={graph} searchTerm={q} />
               </div>
           )}
         </div>
