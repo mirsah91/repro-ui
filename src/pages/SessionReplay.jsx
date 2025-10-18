@@ -48,12 +48,14 @@ function groupByAction(items) {
     return Array.from(groups.values()).sort((a, b) => a.start - b.start);
 }
 
+const RRWEB_EVENT_TYPE_META = 4;
+
 function extractViewportFromEvents(events) {
     if (!Array.isArray(events)) return null;
     for (let i = events.length - 1; i >= 0; i--) {
         const ev = events[i];
         const data = ev?.data;
-        if (ev?.type === 4 && data && typeof data.width === "number" && typeof data.height === "number") {
+        if (ev?.type === RRWEB_EVENT_TYPE_META && data && typeof data.width === "number" && typeof data.height === "number") {
             const width = Math.round(data.width);
             const height = Math.round(data.height);
             if (width > 0 && height > 0) return { width, height };
@@ -359,6 +361,8 @@ export default function SessionReplay({ sessionId }) {
         let viewportProbe = null;
         let mismatchSentinel = null;
         let detachResize = null;
+        let detachEventCast = null;
+        let detachFullSnapshot = null;
 
         (async () => {
             try {
@@ -426,6 +430,36 @@ export default function SessionReplay({ sessionId }) {
                     catch (err) { warn("detach resize failed", err); }
                 };
 
+                const handleEventCast = (event) => {
+                    if (!event || typeof event.type !== "number") return;
+                    if (event.type === RRWEB_EVENT_TYPE_META) {
+                        const width = Math.round(Number(event?.data?.width) || 0);
+                        const height = Math.round(Number(event?.data?.height) || 0);
+                        if (width > 0 && height > 0) {
+                            const prev = viewportSizeRef.current;
+                            viewportSizeRef.current = { width, height };
+                            if (!prev || prev.width !== width || prev.height !== height) {
+                                log("meta viewport", viewportSizeRef.current);
+                            }
+                            requestAnimationFrame(() => applyFitContain("meta-event"));
+                        }
+                    }
+                };
+                rep.on(ReplayerEvents.EventCast, handleEventCast);
+                detachEventCast = () => {
+                    try { rep.off(ReplayerEvents.EventCast, handleEventCast); }
+                    catch (err) { warn("detach event-cast failed", err); }
+                };
+
+                const handleFullsnapshot = () => {
+                    requestAnimationFrame(() => applyFitContain("fullsnapshot"));
+                };
+                rep.on(ReplayerEvents.FullsnapshotRebuilded, handleFullsnapshot);
+                detachFullSnapshot = () => {
+                    try { rep.off(ReplayerEvents.FullsnapshotRebuilded, handleFullsnapshot); }
+                    catch (err) { warn("detach fullsnapshot failed", err); }
+                };
+
                 // Observe iframe insertion -> first fit
                 mo = new MutationObserver(() => {
                     const iframe = findIframe();
@@ -439,6 +473,22 @@ export default function SessionReplay({ sessionId }) {
                 // Also try a frame later
                 requestAnimationFrame(() => applyFitContain("init-rAF-fit"));
 
+                try {
+                    const meta = rep.getMetaData?.();
+                    if (meta) {
+                        setPlayerMeta({ totalTime: meta.totalTime ?? 0 });
+                        const width = Math.round(Number(meta.width) || 0);
+                        const height = Math.round(Number(meta.height) || 0);
+                        if (width > 0 && height > 0) {
+                            viewportSizeRef.current = { width, height };
+                            log("meta dimensions", viewportSizeRef.current);
+                            requestAnimationFrame(() => applyFitContain("meta-fit"));
+                        }
+                    }
+                } catch (err) {
+                    warn("read meta failed", err);
+                }
+
                 rep.play();
                 setPlayerStatus("playing");
 
@@ -449,12 +499,6 @@ export default function SessionReplay({ sessionId }) {
                         setCurrentTime(t);
                     } catch (err) { warn("poll current time failed", err); }
                 }, POLL_MS);
-
-                // read meta
-                try {
-                    const meta = rep.getMetaData?.();
-                    if (meta) { setPlayerMeta({ totalTime: meta.totalTime ?? 0 }); log("rrweb meta", meta); }
-                } catch (err) { warn("read meta failed", err); }
 
                 // feed new events
                 (async function feed() {
@@ -507,6 +551,8 @@ export default function SessionReplay({ sessionId }) {
             if (viewportProbe) clearInterval(viewportProbe);
             if (mismatchSentinel) clearInterval(mismatchSentinel);
             if (detachResize) detachResize();
+            if (detachEventCast) detachEventCast();
+            if (detachFullSnapshot) detachFullSnapshot();
             viewportSizeRef.current = null;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
