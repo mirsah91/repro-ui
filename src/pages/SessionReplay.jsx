@@ -402,6 +402,10 @@ export default function SessionReplay({ sessionId }) {
 
     // ---- bootstrap rrweb ----
     useEffect(() => {
+        if (viewMode !== "replay") {
+            return;
+        }
+
         if (status !== "ready" || !containerRef.current || replayerRef.current) return;
 
         let cancelled = false;
@@ -530,7 +534,18 @@ export default function SessionReplay({ sessionId }) {
             if (mismatchSentinel) clearInterval(mismatchSentinel);
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [status]);
+    }, [status, viewMode]);
+
+    useEffect(() => {
+        if (viewMode === "replay") return;
+        try {
+            replayerRef.current?.pause();
+        } catch (err) {
+            warn("pause on view switch failed", err);
+        }
+        replayerRef.current = null;
+        setPlayerStatus((prev) => (prev === "playing" ? "paused" : prev));
+    }, [viewMode]);
 
     // recompute offset if ticks later
     useEffect(() => {
@@ -787,7 +802,7 @@ export default function SessionReplay({ sessionId }) {
 
 
     const playbackSection = (
-        <section className="flex min-h-0 flex-1 flex-col bg-white">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white">
             <div className="flex items-center justify-between border-b border-slate-200 px-8 py-5">
                 <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Playback</p>
@@ -815,7 +830,7 @@ export default function SessionReplay({ sessionId }) {
                 </div>
             </div>
 
-            <div className="relative flex-1 min-h-0 bg-slate-100 px-8 py-6">
+            <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden bg-slate-100 px-8 py-6">
                 <div ref={containerRef} className="h-full w-full border border-slate-300 bg-white" />
                 {playerStatus === "loading" && (
                     <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -978,7 +993,7 @@ export default function SessionReplay({ sessionId }) {
     );
 
     const timelinePanel = (
-        <aside className="flex min-h-0 flex-1 flex-col border-t border-slate-200 bg-white lg:border-l lg:border-t-0">
+        <aside className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t border-slate-200 bg-white lg:border-l lg:border-t-0">
             <div className="border-b border-slate-200 px-8 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
@@ -1213,7 +1228,7 @@ export default function SessionReplay({ sessionId }) {
     );
 
     return (
-        <div className="flex min-h-screen flex-col bg-slate-100 text-slate-900">
+        <div className="flex min-h-screen min-w-0 flex-col overflow-x-hidden bg-slate-100 text-slate-900">
             <header className="border-b border-slate-200 bg-white px-8 py-5">
                 <div className="flex flex-wrap items-center justify-between gap-4">
                     <div className="flex items-center gap-4">
@@ -1253,13 +1268,13 @@ export default function SessionReplay({ sessionId }) {
                     <span>{viewMode === "replay" ? timelineSummaryText : traceSummaryText}</span>
                 </div>
             </header>
-            <main className="flex flex-1 min-h-0 flex-col">
+            <main className="flex flex-1 min-h-0 min-w-0 flex-col">
                 {viewMode === "replay" ? (
                     <div className="flex flex-1 min-h-0 flex-col lg:flex-row">
-                        <div className="flex min-h-0 flex-1 flex-col">
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                             {playbackSection}
                         </div>
-                        <div className="flex min-h-0 flex-col lg:w-[28rem] lg:flex-none">
+                        <div className="flex min-h-0 w-full min-w-0 flex-col lg:w-[24rem] lg:flex-none">
                             {timelinePanel}
                         </div>
                     </div>
