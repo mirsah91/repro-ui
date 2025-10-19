@@ -4,19 +4,40 @@ import "rrweb/dist/rrweb.min.css";
 import useTimeline from "../hooks/useTimeline";
 import { decodeBase64JsonArray } from "../lib/rrwebDecode";
 import EmailItem from "../components/EmailItem.jsx";
-import '../components/SessionReply.css'
+import { FunctionTraceViewer } from "../components/FunctionTracerViewer.jsx";
+import useSessionTraces from "../hooks/useSessionTraces.js";
+import "../components/SessionReply.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 const WINDOW_MS = 1500;
 const POLL_MS = 200;
 
 // ===== DEBUG =====
-const DEBUG = true;
+const DEBUG = false;
 const log = (...a) => DEBUG && console.log("[repro:replay]", ...a);
 const warn = (...a) => DEBUG && console.warn("[repro:replay]", ...a);
 
 // rank order inside one action group
 const KIND_RANK = { action: 0, request: 1, db: 2, email: 3 };
+
+function LogoMark({ className = "", ...props }) {
+    return (
+        <svg
+            viewBox="0 0 48 48"
+            role="img"
+            aria-label="Replay logo"
+            className={className}
+            {...props}
+        >
+            <rect width="48" height="48" fill="#0f172a" />
+            <path d="M10 8h8v32h-8z" fill="#1d4ed8" />
+            <path
+                d="M20 8h14c7.2 0 12 4.16 12 10.52 0 4.74-2.72 8.2-7.38 9.7l7.9 11.78H35.8l-7.38-9.3H28v9.3h-8V8Zm8 7.12v7.32h6.07c2.5 0 4.05-1.3 4.05-3.66 0-2.34-1.55-3.66-4.05-3.66Z"
+                fill="#f8fafc"
+            />
+        </svg>
+    );
+}
 
 function itemServerTime(it) {
     if (typeof it.t === "number") return it.t;
@@ -93,7 +114,15 @@ function useRrwebStream(sessionId) {
         log("pulled rrweb chunk", { limit, got: items.length, nextSeq: nextSeqRef.current, queue: queueRef.current.length });
     }
 
-    return { meta, status, queueRef, pullMore, doneRef };
+    const resetStream = React.useCallback(() => {
+        const first = Math.max(0, Number(meta?.firstSeq || 0));
+        queueRef.current = [];
+        nextSeqRef.current = first;
+        doneRef.current = false;
+        log("resetStream", { first });
+    }, [meta?.firstSeq]);
+
+    return { meta, status, queueRef, pullMore, doneRef, resetStream };
 }
 
 function tickTime(ev) {
@@ -132,8 +161,9 @@ export default function SessionReplay({ sessionId }) {
     const lastPausedTimeRef = useRef(0);
     const lastPlayerSizeRef = useRef({ width: 0, height: 0 });
 
-    const { status, queueRef, pullMore, doneRef } = useRrwebStream(sessionId);
+    const { status, queueRef, pullMore, doneRef, resetStream } = useRrwebStream(sessionId);
     const rawTicks = useTimeline(sessionId);
+    const { status: traceStatus, entries: traceEntries } = useSessionTraces(sessionId);
 
     const [currentTime, setCurrentTime] = useState(0);
     const [playerStatus, setPlayerStatus] = useState("idle");
@@ -141,9 +171,63 @@ export default function SessionReplay({ sessionId }) {
     const [playerMeta, setPlayerMeta] = useState({ totalTime: 0 });
     const [hoveredMarker, setHoveredMarker] = useState(null);
     const [activeEventId, setActiveEventId] = useState(null);
+    const [viewMode, setViewMode] = useState("replay");
+    const [selectedTraceId, setSelectedTraceId] = useState(null);
+    const [collapsedGroups, setCollapsedGroups] = useState({});
 
     const rrwebFirstTsRef = useRef(null);
     const clockOffsetRef = useRef(0);
+
+    useEffect(() => {
+        setViewMode("replay");
+        setSelectedTraceId(null);
+        setShowAll(false);
+        setCollapsedGroups({});
+    }, [sessionId]);
+
+    useEffect(() => {
+        setCollapsedGroups({});
+    }, [showAll]);
+
+    useEffect(() => {
+        if (viewMode !== "replay") return;
+        if (status !== "ready") return;
+        resetStream();
+    }, [viewMode, status, resetStream]);
+
+    useEffect(() => {
+        if (!traceEntries.length) {
+            setSelectedTraceId(null);
+            return;
+        }
+        if (selectedTraceId && !traceEntries.find((entry) => entry.id === selectedTraceId)) {
+            setSelectedTraceId(null);
+        }
+    }, [traceEntries, selectedTraceId]);
+
+    const selectedTrace = useMemo(() => {
+        if (!traceEntries.length || !selectedTraceId) return null;
+        return traceEntries.find((entry) => entry.id === selectedTraceId) || null;
+    }, [traceEntries, selectedTraceId]);
+
+    const traceTitle = selectedTrace
+        ? `${selectedTrace.label || "Function trace"} (${selectedTrace.total || selectedTrace.events.length || 0} events)`
+        : "Function trace";
+
+    const traceSummaryText = useMemo(() => {
+        if (traceStatus === "loading") return "Loading traces…";
+        if (traceStatus === "error") return "Failed to load traces";
+        if (traceEntries.length) {
+            const count = traceEntries.length;
+            const suffix = count === 1 ? "trace" : "traces";
+            if (!selectedTraceId) {
+                return `${count} ${suffix} • Select to inspect`;
+            }
+            return `${count} ${suffix}`;
+        }
+        if (traceStatus === "ready") return "No traces captured";
+        return "Trace inspector";
+    }, [traceEntries.length, traceStatus, selectedTraceId]);
 
     // ---- sizing helpers (content-box) ----
     const measureContainerSize = React.useCallback(() => {
@@ -218,6 +302,19 @@ export default function SessionReplay({ sessionId }) {
             return;
         }
 
+        iframe.style.backgroundColor = "#ffffff";
+        try {
+            const doc = iframe.contentDocument || iframe.contentWindow?.document;
+            if (doc?.documentElement) {
+                doc.documentElement.style.backgroundColor = "#ffffff";
+            }
+            if (doc?.body) {
+                doc.body.style.backgroundColor = "#ffffff";
+            }
+        } catch (err) {
+            warn(`${tag}: unable to set iframe background`, err);
+        }
+
         const scale = Math.min(cont.width / intrinsic.width, cont.height / intrinsic.height, 1); // cap at 1 (no upscale)
         const scaledW = Math.round(intrinsic.width * scale);
         const scaledH = Math.round(intrinsic.height * scale);
@@ -237,11 +334,15 @@ export default function SessionReplay({ sessionId }) {
             wrapper.style.width = `${scaledW}px`;
             wrapper.style.height = `${scaledH}px`;
             wrapper.style.overflow = "hidden";
+            wrapper.style.background = "#ffffff";
         }
 
         // container should hide overflow as well
         const root = containerRef.current;
-        if (root) root.style.overflow = "hidden";
+        if (root) {
+            root.style.overflow = "hidden";
+            root.style.background = "#ffffff";
+        }
 
         log(`${tag}: applyFitContain`, { container: cont, intrinsic, scale, scaled: { w: scaledW, h: scaledH } });
     }, [findIframe, measureContainerSize, measureIframeContentSize]);
@@ -303,8 +404,22 @@ export default function SessionReplay({ sessionId }) {
 
     const renderGroups = useMemo(() => groupByAction(baseItems), [baseItems]);
 
+    const timelineSummaryText = useMemo(() => {
+        if (!renderGroups.length) {
+            return showAll ? "No backend events" : "No contextual events";
+        }
+        const total = renderGroups.reduce((sum, group) => sum + group.items.length, 0);
+        const actionLabel = renderGroups.length === 1 ? "action" : "actions";
+        const eventLabel = total === 1 ? "event" : "events";
+        return `${total} ${eventLabel} across ${renderGroups.length} ${actionLabel}`;
+    }, [renderGroups, showAll]);
+
     // ---- bootstrap rrweb ----
     useEffect(() => {
+        if (viewMode !== "replay") {
+            return;
+        }
+
         if (status !== "ready" || !containerRef.current || replayerRef.current) return;
 
         let cancelled = false;
@@ -332,8 +447,11 @@ export default function SessionReplay({ sessionId }) {
                 }
                 log("clock offsets", { rrwebFirst: rrwebFirstTsRef.current, tick0: ticks[0]?._t, offset: clockOffsetRef.current });
 
-                const measured = await waitForContainerSize();
-                if (!measured) { setPlayerStatus("error"); warn("no measured size"); return; }
+                let measured = await waitForContainerSize();
+                if (!measured) {
+                    measured = { width: 1280, height: 720 };
+                    warn("no measured size, falling back to", measured);
+                }
                 log("init measured size", measured);
 
                 const rep = new Replayer(initial, {
@@ -430,7 +548,18 @@ export default function SessionReplay({ sessionId }) {
             if (mismatchSentinel) clearInterval(mismatchSentinel);
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [status]);
+    }, [status, viewMode]);
+
+    useEffect(() => {
+        if (viewMode === "replay") return;
+        try {
+            replayerRef.current?.pause();
+        } catch (err) {
+            warn("pause on view switch failed", err);
+        }
+        replayerRef.current = null;
+        setPlayerStatus((prev) => (prev === "playing" ? "paused" : prev));
+    }, [viewMode]);
 
     // recompute offset if ticks later
     useEffect(() => {
@@ -494,6 +623,58 @@ export default function SessionReplay({ sessionId }) {
         return Math.max(0, Math.min(total || 0, rrMs));
     }
 
+    const findTraceForEvent = React.useCallback(
+        (ev) => {
+            if (!ev || !traceEntries.length) return null;
+            const meta = ev.meta || {};
+            const traceHints = [
+                meta.traceId,
+                meta.trace_id,
+                meta.requestTraceId,
+                meta.requestRid,
+                meta.rid,
+                meta.id,
+            ].filter(Boolean);
+
+            for (const hint of traceHints) {
+                const direct = traceEntries.find(
+                    (entry) =>
+                        entry.id === hint ||
+                        entry.requestRid === hint ||
+                        entry.request?.traceId === hint ||
+                        entry.request?.requestRid === hint ||
+                        entry.request?.rid === hint
+                );
+                if (direct) return direct;
+            }
+
+            const keyMatches = [meta.key, meta.urlKey, meta.name].filter(Boolean);
+            for (const key of keyMatches) {
+                const match = traceEntries.find(
+                    (entry) => entry.label === key || entry.request?.key === key || entry.groupKey === key
+                );
+                if (match) return match;
+            }
+
+            if (meta.method && meta.url) {
+                const method = String(meta.method).toUpperCase();
+                const url = String(meta.url);
+                const match = traceEntries.find((entry) => {
+                    const req = entry.request || {};
+                    return (
+                        req.method && req.url &&
+                        String(req.method).toUpperCase() === method &&
+                        String(req.url) === url
+                    );
+                });
+                if (match) return match;
+            }
+
+            return null;
+        },
+        [traceEntries]
+    );
+
     function jumpToEvent(ev) {
         const rep = replayerRef.current;
         if (!rep) return;
@@ -513,6 +694,14 @@ export default function SessionReplay({ sessionId }) {
                 const el = document.getElementById(`event-${key}`);
                 if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
             });
+        }
+
+        if (ev.kind === "request") {
+            const matchedTrace = findTraceForEvent(ev);
+            if (matchedTrace) {
+                setSelectedTraceId(matchedTrace.id);
+                setViewMode("trace");
+            }
         }
     }
 
@@ -574,10 +763,18 @@ export default function SessionReplay({ sessionId }) {
     const hoverPosition = hoveredMarker ? Math.min(92, Math.max(8, hoveredMarker.position * 100)) : 0;
 
     const KIND_COLORS = {
-        action: "bg-amber-400",
-        request: "bg-sky-500",
-        db: "bg-emerald-400",
-        email: "bg-fuchsia-400",
+        action: "bg-amber-500",
+        request: "bg-blue-500",
+        db: "bg-cyan-500",
+        email: "bg-violet-500",
+    };
+
+    const KIND_ACCENT_COLORS = {
+        action: "#f59e0b",
+        request: "#2563eb",
+        db: "#0891b2",
+        email: "#7c3aed",
+        default: "#94a3b8",
     };
 
     const KIND_ICON_COMPONENTS = {
@@ -617,349 +814,490 @@ export default function SessionReplay({ sessionId }) {
         return <Icon className={`h-4 w-4 ${className}`} />;
     }
 
-    return (
-        <div className="h-screen w-full overflow-hidden bg-slate-950 text-slate-100">
-            <div className="grid h-full w-full grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
-                <section className="flex min-h-0 flex-col border-r border-slate-900/60 bg-slate-950/80 backdrop-blur">
-                    <div className="flex items-center justify-between border-b border-slate-900/60 px-6 py-4">
-                        <div>
-                            <h1 className="text-lg font-semibold tracking-tight">Session replay</h1>
-                            <p className="text-xs text-slate-400">session {sessionId ?? "—"}</p>
-                        </div>
-                        <div className="flex items-center gap-3 text-xs text-slate-400">
-              <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 font-medium ${
-                  playerStatus === "playing" ? "bg-emerald-500/10 text-emerald-300" :
-                      playerStatus === "paused" ? "bg-amber-500/10 text-amber-300" :
-                          playerStatus === "loading" ? "bg-sky-500/10 text-sky-300" :
-                              playerStatus === "error" ? "bg-rose-500/10 text-rose-300" :
-                                  "bg-slate-700/20 text-slate-300"}`}>
-                <span className="h-2 w-2 rounded-full bg-current" />
-                  {playerStatus}
-              </span>
-                            <span>{formatTime(currentTime)} / {formatTime(playerMeta.totalTime)}</span>
+
+    const playbackSection = (
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white">
+            <div className="flex items-center justify-between border-b border-slate-200 px-8 py-5">
+                <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Playback</p>
+                    <h2 className="text-lg font-semibold tracking-tight text-slate-900">Session replay</h2>
+                </div>
+                <div className="flex items-center gap-4 text-xs text-slate-600">
+                    <span
+                        className={`flex items-center gap-2 border px-3 py-1 font-medium uppercase tracking-[0.2em] ${
+                            playerStatus === "playing"
+                                ? "border-emerald-600 text-emerald-600"
+                                : playerStatus === "paused"
+                                    ? "border-amber-600 text-amber-600"
+                                    : playerStatus === "loading"
+                                        ? "border-sky-600 text-sky-600"
+                                        : playerStatus === "error"
+                                            ? "border-rose-600 text-rose-600"
+                                            : "border-slate-400 text-slate-500"
+                        }`}
+                    >
+                        {playerStatus}
+                    </span>
+                    <span className="font-medium text-slate-500">
+                        {formatTime(currentTime)} / {formatTime(playerMeta.totalTime)}
+                    </span>
+                </div>
+            </div>
+
+            <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden bg-slate-100 px-8 py-6">
+                <div ref={containerRef} className="h-full w-full border border-slate-300 bg-white" />
+                {playerStatus === "loading" && (
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                        <div className="border border-slate-300 bg-white px-6 py-3 text-sm text-slate-600">
+                            Preparing replay…
                         </div>
                     </div>
-
-                    <div className="relative flex-1 min-h-0 px-6 pb-6 pt-4">
-                        <div
-                            ref={containerRef}
-                            className="h-full w-full overflow-hidden rounded-2xl border border-slate-900/40 bg-slate-900/80 shadow-2xl"
-                        />
-                        {playerStatus === "loading" && (
-                            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                                <div className="rounded-full border border-slate-800/80 bg-slate-900/80 px-6 py-3 text-sm text-slate-300 shadow-xl">
-                                    Preparing replay…
-                                </div>
-                            </div>
-                        )}
-                        {playerStatus === "error" && (
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="max-w-sm rounded-xl border border-rose-500/40 bg-rose-500/10 px-6 py-4 text-sm text-rose-200">
-                                    Unable to load session replay. Please try again.
-                                </div>
-                            </div>
-                        )}
-                        {playerStatus === "no-rrweb" && (
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="max-w-sm rounded-xl border border-amber-500/40 bg-amber-500/10 px-6 py-4 text-sm text-amber-100">
-                                    No rrweb events (or too few) were captured for this session.
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="border-t border-slate-900/60 bg-slate-950/90 px-6 py-5">
-                        <div className="mb-4 flex items-center gap-3 text-sm">
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    const rep = replayerRef.current;
-                                    if (!rep) return;
-                                    if (playerStatus === "playing") {
-                                        const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
-                                        lastPausedTimeRef.current = now;
-                                        rep.pause();
-                                        setPlayerStatus("paused");
-                                    } else if (playerStatus !== "error" && playerStatus !== "loading") {
-                                        const resumeAt =
-                                            Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
-                                                ? lastPausedTimeRef.current : (rep.getCurrentTime?.() ?? currentTime ?? 0);
-                                        rep.play(resumeAt);
-                                        setPlayerStatus("playing");
-                                    }
-                                }}
-                                className="inline-flex items-center gap-2 rounded-full border border-slate-800/60 bg-slate-900 px-4 py-2 font-medium text-slate-100 transition hover:border-slate-700 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                            >
-                <span className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                  {playerStatus === "playing" ? "Pause" : "Play"}
-                </span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    const rep = replayerRef.current;
-                                    if (!rep) return;
-                                    rep.pause();
-                                    lastPausedTimeRef.current = 0;
-                                    rep.play(0);
-                                    setPlayerStatus("playing");
-                                    setCurrentTime(0);
-                                }}
-                                className="inline-flex items-center gap-2 rounded-full border border-slate-800/60 bg-slate-900 px-4 py-2 text-xs uppercase tracking-[0.2em] text-slate-400 transition hover:border-slate-700 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                            >
-                                Restart
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => applyFitContain("manual-fit")}
-                                className="ml-2 inline-flex items-center gap-2 rounded-full border border-slate-800/60 bg-slate-900 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-400"
-                            >
-                                Refit Now (log)
-                            </button>
-                            <div className="ml-auto text-xs text-slate-400">
-                                {playerStatus === "paused" ? "paused" : "live"}
-                            </div>
+                )}
+                {playerStatus === "error" && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="border border-rose-400 bg-rose-50 px-6 py-4 text-sm text-rose-700">
+                            Unable to load session replay. Please try again.
                         </div>
+                    </div>
+                )}
+                {playerStatus === "no-rrweb" && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="border border-amber-400 bg-amber-50 px-6 py-4 text-sm text-amber-700">
+                            No rrweb events (or too few) were captured for this session.
+                        </div>
+                    </div>
+                )}
+            </div>
 
-                        {/* Timeline (markers above input; input Z lower so markers are clickable) */}
-                        <div className="relative h-20">
-                            {/* Track + progress */}
-                            <div className="absolute inset-x-0 top-1/2 -translate-y-1/2">
-                                <div className="relative h-2 w-full rounded-full bg-slate-800/80">
-                                    <div
-                                        className="absolute inset-y-0 left-0 rounded-full bg-sky-500/70"
-                                        style={{ width: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%` }}
-                                    />
-                                </div>
+            <div className="border-t border-slate-200 bg-white px-8 py-5">
+                <div className="mb-4 flex flex-wrap items-center gap-3 text-sm text-slate-600">
+                    <button
+                        type="button"
+                        onClick={() => {
+                            const rep = replayerRef.current;
+                            if (!rep) return;
+                            if (playerStatus === "playing") {
+                                const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
+                                lastPausedTimeRef.current = now;
+                                rep.pause();
+                                setPlayerStatus("paused");
+                            } else if (playerStatus !== "error" && playerStatus !== "loading") {
+                                const resumeAt =
+                                    Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
+                                        ? lastPausedTimeRef.current
+                                        : rep.getCurrentTime?.() ?? currentTime ?? 0;
+                                rep.play(resumeAt);
+                                setPlayerStatus("playing");
+                            }
+                        }}
+                        className="inline-flex items-center border border-slate-900 bg-slate-900 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    >
+                        <span>{playerStatus === "playing" ? "Pause" : "Play"}</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            const rep = replayerRef.current;
+                            if (!rep) return;
+                            rep.pause();
+                            lastPausedTimeRef.current = 0;
+                            rep.play(0);
+                            setPlayerStatus("playing");
+                            setCurrentTime(0);
+                        }}
+                        className="inline-flex items-center border border-slate-300 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-600 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    >
+                        Restart
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => applyFitContain("manual-fit")}
+                        className="ml-2 inline-flex items-center border border-slate-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 hover:bg-slate-100"
+                    >
+                        Refit now
+                    </button>
+                    <div className="ml-auto text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                        {playerStatus === "paused" ? "paused" : "live"}
+                    </div>
+                </div>
 
-                                {/* Markers overlay (on top) */}
-                                <div className="pointer-events-none absolute inset-0 z-50">
-                                    {timelineMarkers.map((marker) => {
-                                        const event = marker.event;
-                                        const isActive = activeEventId && event.__key === activeEventId;
-                                        const eventTime = alignedSeekMsFor(event);
-                                        const markerTitle = getMarkerTitle(event);
-                                        return (
-                                            <button
-                                                key={marker.key || marker.position}
-                                                type="button"
-                                                className={`pointer-events-auto absolute top-1/2 flex h-8 w-8 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border border-slate-950/70 text-slate-950 shadow transition focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 focus:ring-offset-slate-950 ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "scale-110 ring-2 ring-sky-400/80" : "hover:scale-110"}`}
-                                                style={{left: `${marker.position * 100}%`}}
-                                                onClick={() => jumpToEvent(event)}
-                                                onMouseEnter={() => setHoveredMarker(marker)}
-                                                onMouseLeave={() => setHoveredMarker(null)}
-                                                onFocus={() => setHoveredMarker(marker)}
-                                                onBlur={() => setHoveredMarker(null)}
-                                                title={`${event.kind || "event"} • ${markerTitle}${eventTime != null ? ` • ${formatMaybeTime(eventTime)}` : ""}`}
-                                            >
-                                                <MarkerIcon kind={event.kind} className="text-slate-950"/>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-
-                                {/* Scrubber knob visual (above track but below markers) */}
-                                <div
-                                    className="absolute z-40 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-sky-400 bg-slate-950 shadow-[0_0_0_4px_rgba(56,189,248,0.15)] transition"
-                                    style={{
-                                        left: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%`,
-                                        transform: "translate(-50%, -50%)"
-                                    }}
-                                />
-                            </div>
-
-                            {/* Input slider (under markers; still functional) */}
-                            <input
-                                type="range"
-                                min={0}
-                                max={playerMeta.totalTime || replayerRef.current?.getMetaData?.().totalTime || 0}
-                                value={currentTime}
-                                onChange={(e) => {
-                                    const rep = replayerRef.current;
-                                    const newTime = Number(e.target.value);
-                                    if (!rep) return;
-                                    rep.pause();
-                                    lastPausedTimeRef.current = newTime;
-                                    rep.play(newTime);
-                                    setPlayerStatus("playing");
-                                    setCurrentTime(newTime);
-                                }}
-                                className="timeline-slider absolute inset-0 z-30 appearance-none bg-transparent"
-                                // Tailwind can’t style the native track/thumb cross-browser; ensure CSS sets no huge hitbox.
+                <div className="relative h-20">
+                    <div className="absolute inset-x-0 top-1/2 -translate-y-1/2">
+                        <div className="relative h-2 w-full bg-slate-200">
+                            <div
+                                className="absolute inset-y-0 left-0 bg-sky-500"
+                                style={{ width: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%` }}
                             />
+                        </div>
 
-                            {/* Hover card */}
-                            {hoveredMarker && (() => {
-                                const { event } = hoveredMarker;
-                                const x = Math.min(92, Math.max(8, hoveredMarker.position * 100));
-                                const sub = getMarkerMeta(event);
+                        <div className="pointer-events-none absolute inset-0 z-50">
+                            {timelineMarkers.map((marker) => {
+                                const event = marker.event;
+                                const isActive = activeEventId && event.__key === activeEventId;
+                                const eventTime = alignedSeekMsFor(event);
+                                const markerTitle = getMarkerTitle(event);
                                 return (
-                                    <div
-                                        className="pointer-events-none absolute z-50 -translate-x-1/2 rounded-xl border border-slate-900/60 bg-slate-950/95 px-3 py-2 text-xs text-slate-200 shadow-2xl backdrop-blur"
-                                        style={{ left: `${x}%`, bottom: "calc(50% + 24px)" }}
+                                    <button
+                                        key={marker.key || marker.position}
+                                        type="button"
+                                        className={`pointer-events-auto absolute top-1/2 flex h-8 w-8 -translate-y-1/2 -translate-x-1/2 items-center justify-center border border-white text-slate-900 transition focus:outline-none focus:ring-2 focus:ring-sky-400 ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "ring-2 ring-sky-300" : "hover:opacity-90"}`}
+                                        style={{ left: `${marker.position * 100}%` }}
+                                        onClick={() => jumpToEvent(event)}
+                                        onMouseEnter={() => setHoveredMarker(marker)}
+                                        onMouseLeave={() => setHoveredMarker(null)}
+                                        onFocus={() => setHoveredMarker(marker)}
+                                        onBlur={() => setHoveredMarker(null)}
+                                        title={`${event.kind || "event"} • ${markerTitle}${eventTime != null ? ` • ${formatMaybeTime(eventTime)}` : ""}`}
                                     >
-                                        <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.25em] text-slate-500">
-                                            <span className={`h-2 w-2 rounded-full ${KIND_COLORS[event.kind] || "bg-slate-500"}`} />
-                                            {event.kind}
-                                        </div>
-                                        <div className="mt-1 text-sm font-medium leading-snug text-slate-100 break-words">
-                                            {getMarkerTitle(event)}
-                                        </div>
-                                        {sub && (
-                                            <div className="mt-1 text-[11px] uppercase tracking-[0.3em] text-slate-500">
-                                                {sub}
-                                            </div>
-                                        )}
-                                        <div className="mt-1 text-[11px] text-slate-500">
-                                            {formatMaybeTime(alignedSeekMsFor(event))} rrweb • @{event._t ?? "—"}
+                                        <MarkerIcon kind={event.kind} className="text-white" />
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        <div
+                            className="absolute top-1/2 z-40 h-4 w-4 -translate-y-1/2 border-2 border-sky-400 bg-white"
+                            style={{
+                                left: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%`,
+                                transform: "translate(-50%, -50%)",
+                            }}
+                        />
+                    </div>
+
+                    <input
+                        type="range"
+                        min={0}
+                        max={playerMeta.totalTime || replayerRef.current?.getMetaData?.().totalTime || 0}
+                        value={currentTime}
+                        onChange={(e) => {
+                            const rep = replayerRef.current;
+                            const newTime = Number(e.target.value);
+                            if (!rep) return;
+                            rep.pause();
+                            lastPausedTimeRef.current = newTime;
+                            rep.play(newTime);
+                            setPlayerStatus("playing");
+                            setCurrentTime(newTime);
+                        }}
+                        className="timeline-slider absolute inset-0 z-30 appearance-none bg-transparent"
+                    />
+
+                    {hoveredMarker && (() => {
+                        const { event } = hoveredMarker;
+                        const x = Math.min(92, Math.max(8, hoveredMarker.position * 100));
+                        const sub = getMarkerMeta(event);
+                        return (
+                            <div
+                                className="pointer-events-none absolute z-50 -translate-x-1/2 border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+                                style={{ left: `${x}%`, bottom: "calc(50% + 24px)" }}
+                            >
+                                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.25em] text-slate-500">
+                                    <span className={`h-2 w-2 ${KIND_COLORS[event.kind] || "bg-slate-500"}`} />
+                                    {event.kind}
+                                </div>
+                                <div className="mt-1 break-words text-sm font-medium leading-snug text-slate-900">{getMarkerTitle(event)}</div>
+                                {sub && <div className="mt-1 text-[11px] uppercase tracking-[0.3em] text-slate-400">{sub}</div>}
+                                <div className="mt-1 text-[11px] text-slate-500">{formatMaybeTime(alignedSeekMsFor(event))} rrweb • @{event._t ?? "—"}</div>
+                            </div>
+                        );
+                    })()}
+                </div>
+            </div>
+        </section>
+    );
+
+    const timelinePanel = (
+        <aside className="flex h-full min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden border-t border-slate-200 bg-white lg:border-l lg:border-t-0">
+            <div className="border-b border-slate-200 px-6 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Timeline</p>
+                        <h2 className="text-sm font-semibold text-slate-900">
+                            {showAll ? "All backend events" : "Contextual backend events"}
+                        </h2>
+                    </div>
+                    <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                        <input
+                            type="checkbox"
+                            checked={showAll}
+                            onChange={(e) => setShowAll(e.target.checked)}
+                            className="h-4 w-4 border-slate-400 text-sky-600 focus:ring-sky-500"
+                        />
+                        Show all
+                    </label>
+                </div>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-6 py-5">
+                {!renderGroups.length && (
+                    <div className="border border-dashed border-slate-300 bg-slate-100 px-4 py-5 text-xs text-slate-600">
+                        {showAll
+                            ? "No backend timeline data for this session."
+                            : "No events near the current playback time."}
+                    </div>
+                )}
+                <div className="min-w-0 space-y-4">
+                    {renderGroups.map((g, gi) => {
+                        const groupKey = g.id || `group-${gi}`;
+                        const isCollapsed = Boolean(collapsedGroups[groupKey]);
+                        const action = g.items.find((it) => it.kind === "action");
+                        const title = action?.label || action?.actionId || "Other events";
+                        const startAligned = action ? serverToRrwebOffsetMs(action.tStart) : null;
+                        const endAligned = action ? serverToRrwebOffsetMs(action.tEnd) : null;
+                        const windowLabel = action ? `${formatMaybeTime(startAligned)} → ${formatMaybeTime(endAligned)}` : null;
+
+                        return (
+                            <div key={groupKey} className="w-full border border-slate-200 bg-white">
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        setCollapsedGroups((prev) => {
+                                            const next = { ...prev };
+                                            next[groupKey] = !isCollapsed;
+                                            return next;
+                                        })
+                                    }
+                                    aria-expanded={!isCollapsed}
+                                    className="flex w-full items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                                >
+                                    <div className="space-y-1">
+                                        <div className="text-sm font-semibold text-slate-900">{title}</div>
+                                        <div className="flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.25em] text-slate-500">
+                                            <span>{g.items.length} events</span>
+                                            {windowLabel && <span>{windowLabel}</span>}
                                         </div>
                                     </div>
-                                );
-                            })()}
-                        </div>
-                    </div>
-                </section>
+                                    <span className="text-slate-400">{isCollapsed ? "▸" : "▾"}</span>
+                                </button>
 
-                <aside className="flex h-full min-h-0 flex-col overflow-hidden bg-slate-950/95">
-                    <div className="flex items-center justify-between border-b border-slate-900/60 px-6 py-4">
-                        <div>
-                            <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">Timeline</h2>
-                            <p className="text-xs text-slate-500">{showAll ? "All backend events" : "Contextual backend events"}</p>
-                        </div>
-                        <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                            <input
-                                type="checkbox"
-                                checked={showAll}
-                                onChange={(e) => setShowAll(e.target.checked)}
-                                className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-sky-400 focus:ring-sky-500"
-                            />
-                            Show all
-                        </label>
-                    </div>
+                                {!isCollapsed && (
+                                    <div className="divide-y divide-slate-200">
+                                        {g.items.map((e, ei) => {
+                                            const isEventActive = activeEventId && e.__key === activeEventId;
+                                            const eventKey = `${groupKey}-${ei}`;
+                                            const isRequest = e.kind === "request";
+                                            const isDb = e.kind === "db";
+                                            const isEmail = e.kind === "email";
+                                            const isAction = e.kind === "action";
 
-                    <div className="flex-1 overflow-y-auto px-6 py-6 min-h-0">
-                        {!renderGroups.length && (
-                            <div className="text-xs text-slate-500">
-                                No backend timeline data for this session.
-                            </div>
-                        )}
-
-                        <div className="space-y-5">
-                            {renderGroups.map((g, gi) => {
-                                const action = g.items.find((it) => it.kind === "action");
-                                const title = action?.label || action?.actionId || "Other events";
-                                const startAligned = action ? serverToRrwebOffsetMs(action.tStart) : null;
-                                const endAligned = action ? serverToRrwebOffsetMs(action.tEnd) : null;
-                                const windowLabel = action ? `${formatMaybeTime(startAligned)} → ${formatMaybeTime(endAligned)}` : null;
-
-                                return (
-                                    <div
-                                        key={g.id || gi}
-                                        className="rounded-2xl border border-slate-900/60 bg-slate-900/70 shadow-lg backdrop-blur"
-                                    >
-                                        <div className="flex items-center justify-between border-b border-slate-900/60 px-4 py-3">
-                                            <div>
-                                                <div className="text-sm font-semibold text-slate-100">{title}</div>
-                                                {windowLabel && (
-                                                    <div className="text-xs text-slate-500">{windowLabel}</div>
-                                                )}
-                                            </div>
-                                            <div className="text-[11px] uppercase tracking-[0.25em] text-slate-500">
-                                                {g.items.length} events
-                                            </div>
-                                        </div>
-
-                                        <div className="space-y-3 px-4 py-3">
-                                            {g.items.map((e, i) => {
-                                                const aligned = toRrwebTime(e._t);
-                                                const isActive = activeEventId && e.__key === activeEventId;
-                                                return (
-                                                    <div
-                                                        key={e.__key || i}
-                                                        id={e.__key ? `event-${e.__key}` : undefined}
-                                                        role="button"
-                                                        tabIndex={0}
-                                                        onClick={() => jumpToEvent(e)}
-                                                        onKeyDown={(k) => (k.key === "Enter" || k.key === " ") && jumpToEvent(e)}
-                                                        className={`group relative overflow-hidden rounded-xl border px-3 py-3 text-sm transition focus:outline-none focus:ring-2 focus:ring-sky-500 ${
-                                                            isActive
-                                                                ? "border-sky-500/60 bg-sky-500/10"
-                                                                : "border-slate-800/60 bg-slate-950/40 hover:border-slate-700 hover:bg-slate-900/60"
-                                                        }`}
-                                                    >
-                                                        <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-slate-500">
-                              <span className="flex items-center gap-2">
-                                <span className={`h-2 w-2 rounded-full ${KIND_COLORS[e.kind] || "bg-slate-500"}`} />
-                                  {e.kind}
-                              </span>
-                                                            <span>
-                                @{e._t ?? "—"} • {typeof aligned === "number" ? `${Math.round(aligned)}ms` : "—"}
-                              </span>
+                                            return (
+                                                <button
+                                                    id={`event-${e.__key}`}
+                                                    key={eventKey}
+                                                    type="button"
+                                                    onClick={() => jumpToEvent(e)}
+                                                    className={`flex w-full flex-col gap-3 px-4 py-3 text-left transition ${
+                                                        isEventActive ? "bg-slate-100" : "hover:bg-slate-50"
+                                                    }`}
+                                                >
+                                                    <div className="flex items-start justify-between gap-4">
+                                                        <div className="flex min-w-0 items-start gap-3">
+                                                            <span className={`h-2 w-2 ${KIND_COLORS[e.kind] || "bg-slate-500"}`} />
+                                                            <div className="min-w-0">
+                                                                <div className="break-words text-sm font-semibold text-slate-900">{getMarkerTitle(e)}</div>
+                                                                <div className="mt-1 text-[11px] uppercase tracking-[0.28em] text-slate-400">{e.kind}</div>
+                                                            </div>
                                                         </div>
-
-                                                        {e.kind === "request" && (
-                                                            <div className="space-y-1">
-                                                                <div className="font-mono text-xs text-slate-200">
-                                                                    {e.meta?.method} {e.meta?.url}
-                                                                </div>
-                                                                <div className="text-xs text-slate-400">
-                                                                    status {e.meta?.status} • {e.meta?.durMs}ms
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                        {e.kind === "db" && (
-                                                            <div className="space-y-2 text-xs text-slate-300">
-                                                                <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-slate-400">
-                                                                    {e.meta?.collection} • {e.meta?.op}
-                                                                </div>
-                                                                {e.meta?.query && (
-                                                                    <pre className="max-h-36 overflow-auto rounded-lg bg-slate-950/70 p-3 text-[11px] leading-relaxed text-slate-300">
-                                    {JSON.stringify(e.meta.query, null, 2)}
-                                  </pre>
-                                                                )}
-                                                                {e.meta?.resultMeta && (
-                                                                    <div className="text-[11px] text-slate-400">
-                                                                        result {JSON.stringify(e.meta.resultMeta)}
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                        {e.kind === "action" && (
-                                                            <div className="space-y-1 text-xs text-slate-200">
-                                                                <div className="font-mono text-sm">{e.label || e.actionId}</div>
-                                                                {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
-                                                                    <div className="text-[11px] text-slate-400">
-                                                                        [{e.tStart ?? "—"} … {e.tEnd ?? "—"}]
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                        {e.kind === "email" && (
-                                                            <div className="text-xs text-slate-200">
-                                                                <EmailItem meta={e.meta} />
-                                                            </div>
-                                                        )}
+                                                        <div className="text-right text-xs text-slate-500">
+                                                            <div>{formatMaybeTime(alignedSeekMsFor(e))}</div>
+                                                            {typeof e._t === "number" && <div className="font-mono text-[11px] text-slate-400">@{e._t}</div>}
+                                                        </div>
                                                     </div>
-                                                );
-                                            })}
-                                        </div>
+
+                                                    {isRequest && (
+                                                        <div className="space-y-2 text-xs text-slate-600">
+                                                            <div className="break-words font-mono text-sm text-slate-900">
+                                                                {e.meta?.method} {e.meta?.url}
+                                                            </div>
+                                                            <div className="flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.28em] text-slate-500">
+                                                                {e.meta?.status != null && <span>Status {e.meta.status}</span>}
+                                                                {e.meta?.durMs != null && <span>{e.meta.durMs}ms</span>}
+                                                                {typeof e.meta?.size === "number" && <span>{e.meta.size} bytes</span>}
+                                                            </div>
+                                                            {e.meta?.body && (
+                                                                <pre className="max-h-40 max-w-full overflow-auto border border-slate-300 bg-slate-100 p-3 text-[11px] leading-relaxed text-slate-700">
+                                                                    {JSON.stringify(e.meta.body, null, 2)}
+                                                                </pre>
+                                                            )}
+                                                            {e.meta?.response && (
+                                                                <pre className="max-h-40 max-w-full overflow-auto border border-slate-300 bg-slate-100 p-3 text-[11px] leading-relaxed text-slate-700">
+                                                                    {JSON.stringify(e.meta.response, null, 2)}
+                                                                </pre>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    {isDb && (
+                                                        <div className="space-y-2 text-xs text-slate-600">
+                                                            <div className="break-words font-mono text-sm text-slate-900">
+                                                                {e.meta?.collection} • {e.meta?.op}
+                                                            </div>
+                                                            {e.meta?.query && (
+                                                                <pre className="max-h-36 max-w-full overflow-auto border border-slate-300 bg-slate-100 p-3 text-[11px] leading-relaxed text-slate-700">
+                                                                    {JSON.stringify(e.meta.query, null, 2)}
+                                                                </pre>
+                                                            )}
+                                                            {e.meta?.resultMeta && (
+                                                                <div className="text-[11px] text-slate-500">result {JSON.stringify(e.meta.resultMeta)}</div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    {isAction && (
+                                                        <div className="space-y-1 text-xs text-slate-600">
+                                                            <div className="break-words font-mono text-sm text-slate-900">{e.label || e.actionId}</div>
+                                                            {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
+                                                                <div className="text-[11px] text-slate-500">[{e.tStart ?? "—"} … {e.tEnd ?? "—"}]</div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    {isEmail && (
+                                                        <div className="text-xs text-slate-600">
+                                                            <EmailItem meta={e.meta} />
+                                                        </div>
+                                                    )}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        </aside>
+    );
+
+    const tracePanelContent = (
+        <>
+            <div className="border-b border-slate-200 px-6 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Function traces</p>
+                        <h2 className="text-sm font-semibold text-slate-900">{traceTitle}</h2>
+                    </div>
+                    <span className="text-[11px] uppercase tracking-[0.25em] text-slate-500">{traceSummaryText}</span>
+                </div>
+                <p className="mt-2 text-xs text-slate-500">Select a request to inspect its captured trace.</p>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-6 py-5">
+                <div className="flex min-h-0 flex-1 flex-col gap-4">
+                    {traceStatus === "loading" && !traceEntries.length && (
+                        <div className="border border-slate-200 bg-slate-100 px-4 py-4 text-xs text-slate-600">Fetching trace data…</div>
+                    )}
+                    {traceStatus === "error" && !traceEntries.length && (
+                        <div className="border border-rose-400 bg-rose-50 px-4 py-4 text-xs text-rose-700">Unable to load traces for this session.</div>
+                    )}
+                    {traceStatus === "ready" && !traceEntries.length && (
+                        <div className="border border-slate-200 bg-slate-100 px-4 py-4 text-xs text-slate-600">No function traces were captured for this session.</div>
+                    )}
+                    {traceStatus === "idle" && !traceEntries.length && (
+                        <div className="border border-slate-200 bg-slate-100 px-4 py-4 text-xs text-slate-600">Traces will appear once data is collected for this session.</div>
+                    )}
+                    {traceEntries.length > 0 && (
+                        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden">
+                            {traceEntries.map((entry) => {
+                                const isActive = selectedTrace?.id === entry.id;
+                                const meta = entry.request || {};
+                                const label = entry.label || meta.method || entry.id;
+                                return (
+                                    <div key={entry.id} className="border border-slate-200 bg-white">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setSelectedTraceId(entry.id);
+                                                setViewMode("trace");
+                                            }}
+                                            className={`flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition ${
+                                                isActive ? "bg-slate-100" : "bg-white hover:bg-slate-50"
+                                            }`}
+                                        >
+                                            <div className="min-w-0">
+                                                <div className="break-words text-sm font-semibold text-slate-900">{label}</div>
+                                                <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.25em] text-slate-500">
+                                                    <span>Status {meta.status ?? "—"}</span>
+                                                    <span>{meta.durMs != null ? `${meta.durMs}ms` : "—"}</span>
+                                                    <span>{entry.total} events</span>
+                                                </div>
+                                            </div>
+                                            <span className="text-slate-400">{isActive ? "▾" : "▸"}</span>
+                                        </button>
+                                        {isActive && (
+                                            <div className="border-t border-slate-200 bg-slate-50 px-4 py-4">
+                                                <FunctionTraceViewer trace={selectedTrace?.events || []} title={traceTitle} className="is-embedded" />
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </>
+    );
 
-                            {!renderGroups.length && !showAll && (
-                                <div className="rounded-XL border border-slate-900/60 bg-slate-900/70 px-4 py-3 text-xs text-slate-400">
-                                    No events near the current time. Try{" "}
-                                    <button className="text-sky-400 underline" onClick={() => setShowAll(true)}>
-                                        showing all
-                                    </button>
-                                    .
-                                </div>
-                            )}
+    const traceFullView = (
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden border-t border-slate-200 bg-white">
+            {tracePanelContent}
+        </section>
+    );
+
+    return (
+        <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-slate-100 text-slate-900">
+            <header className="border-b border-slate-200 bg-white px-8 py-5">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex items-center gap-4">
+                        <LogoMark className="h-10 w-10" />
+                        <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.4em] text-slate-500">Replay console</p>
+                            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Session debugger</h1>
                         </div>
                     </div>
-                </aside>
-            </div>
+                    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.25em]">
+                        <button
+                            type="button"
+                            onClick={() => setViewMode("replay")}
+                            className={`border px-4 py-2 ${
+                                viewMode === "replay"
+                                    ? "border-slate-900 bg-slate-900 text-white"
+                                    : "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+                            }`}
+                        >
+                            Replay
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setViewMode("trace")}
+                            className={`border px-4 py-2 ${
+                                viewMode === "trace"
+                                    ? "border-slate-900 bg-slate-900 text-white"
+                                    : "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+                            }`}
+                        >
+                            Function traces
+                        </button>
+                    </div>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-slate-600">
+                    <span className="font-mono text-slate-800">Session {sessionId || "—"}</span>
+                    <span>{viewMode === "replay" ? timelineSummaryText : traceSummaryText}</span>
+                </div>
+            </header>
+            <main className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden">
+                {viewMode === "replay" ? (
+                    <div className="flex flex-1 min-h-0 flex-col lg:flex-row">
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                            {playbackSection}
+                        </div>
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:w-[26rem] lg:flex-none lg:shrink-0 xl:w-[30rem]">
+                            {timelinePanel}
+                        </div>
+                    </div>
+                ) : (
+                    <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+                        {traceFullView}
+                    </div>
+                )}
+            </main>
         </div>
     );
 }

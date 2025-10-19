@@ -585,7 +585,7 @@ function TraceGraphView({ graph }) {
 }
 
 /* ============================== Wrapper ================================ */
-export function FunctionTraceViewer({ trace = [], title = "Function trace" }) {
+export function FunctionTraceViewer({ trace = [], title = "Function trace", className = "" }) {
   const events = useMemo(() => normalizeTrace(trace), [trace]);
   const calls = useMemo(() => buildCallTree(events), [events]);
 
@@ -634,7 +634,7 @@ export function FunctionTraceViewer({ trace = [], title = "Function trace" }) {
   const graph = useMemo(() => buildGraphLayout(filtered, { pack: true }), [filtered]);
 
   return (
-      <div className="trace-viewer">
+      <div className={`trace-viewer${className ? ` ${className}` : ""}`}>
         <div className="trace-header">
           <div className="trace-heading">
             <h2>{title}</h2>
