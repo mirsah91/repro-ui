@@ -20,27 +20,22 @@ function SessionReplayRoute() {
     const sid = useSessionIdFromUrl();
     if (!sid) {
         return (
-            <div className="min-h-screen bg-slate-900 text-slate-100">
-                <div className="relative h-full overflow-hidden">
-                    <div className="pointer-events-none absolute inset-0">
-                        <div className="absolute -top-28 -left-28 h-72 w-72 rounded-full bg-sky-400/30 blur-3xl" />
-                        <div className="absolute bottom-0 right-0 h-80 w-80 rounded-full bg-fuchsia-400/20 blur-3xl" />
-                    </div>
-                    <div className="relative flex h-full flex-col items-center justify-center px-8 py-16 text-center">
-                        <div className="max-w-xl space-y-6">
-                            <div className="space-y-2">
-                                <h1 className="text-3xl font-semibold tracking-tight text-slate-50 sm:text-4xl">Replay console</h1>
-                                <p className="text-sm text-slate-300 sm:text-base">
-                                    Add <code className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-100">?sessionId=YOUR_SESSION_ID</code> to the URL
-                                    or use the hash form <code className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-100">#/s/YOUR_SESSION_ID</code> to load a session.
-                                </p>
-                            </div>
-                            <div className="rounded-2xl border border-slate-700/60 bg-slate-900/60 px-6 py-5 text-left text-sm text-slate-200 shadow-xl backdrop-blur">
-                                <p className="font-semibold text-slate-100">Tip</p>
-                                <p className="mt-2 text-slate-300">
-                                    Once a session loads you&apos;ll be able to inspect the replay, backend timeline, and the captured function trace all in one place.
-                                </p>
-                            </div>
+            <div className="min-h-screen bg-slate-50 text-slate-900">
+                <div className="flex min-h-screen flex-col items-center justify-center px-6 py-16">
+                    <div className="w-full max-w-lg space-y-6 rounded-3xl border border-slate-200 bg-white p-10 shadow-xl shadow-slate-200/60">
+                        <div className="space-y-3 text-left">
+                            <p className="text-xs font-semibold uppercase tracking-[0.4em] text-slate-500">Replay console</p>
+                            <h1 className="text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">Load a session to get started</h1>
+                            <p className="text-sm leading-6 text-slate-600 sm:text-base">
+                                Append <code className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-900">?sessionId=YOUR_SESSION_ID</code> to the URL or use the hash form
+                                <code className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-slate-900">#/s/YOUR_SESSION_ID</code> to open a captured session replay.
+                            </p>
+                        </div>
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-6 py-5 text-left text-sm text-slate-600">
+                            <p className="font-semibold text-slate-900">Why you&apos;ll like it</p>
+                            <p className="mt-2 text-slate-600">
+                                The viewer combines the rrweb recording, backend timeline, and any instrumented function traces so you can debug end-to-end without leaving the page.
+                            </p>
                         </div>
                     </div>
                 </div>

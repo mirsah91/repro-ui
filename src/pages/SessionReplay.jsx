@@ -13,7 +13,7 @@ const WINDOW_MS = 1500;
 const POLL_MS = 200;
 
 // ===== DEBUG =====
-const DEBUG = true;
+const DEBUG = false;
 const log = (...a) => DEBUG && console.log("[repro:replay]", ...a);
 const warn = (...a) => DEBUG && console.warn("[repro:replay]", ...a);
 
@@ -29,27 +29,16 @@ function LogoMark({ className = "", ...props }) {
             className={className}
             {...props}
         >
-            <defs>
-                <linearGradient id="replay-logo-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stopColor="#60a5fa" />
-                    <stop offset="55%" stopColor="#7dd3fc" />
-                    <stop offset="100%" stopColor="#c084fc" />
-                </linearGradient>
-                <linearGradient id="replay-logo-accent" x1="20%" y1="20%" x2="85%" y2="90%">
-                    <stop offset="0%" stopColor="#0f172a" stopOpacity="0.95" />
-                    <stop offset="100%" stopColor="#1e293b" stopOpacity="0.88" />
-                </linearGradient>
-            </defs>
-            <rect x="2" y="2" width="44" height="44" rx="14" fill="url(#replay-logo-gradient)" />
+            <rect x="3" y="3" width="42" height="42" rx="12" fill="#1f2937" />
             <path
-                d="M17 13.5c0-.83.67-1.5 1.5-1.5h8.4c5.65 0 9.6 3.27 9.6 8.45 0 3.87-1.92 6.54-5.25 7.65l4.98 8.98c.52.93-.16 2.07-1.2 2.07H29.6c-.57 0-1.08-.31-1.34-.8l-4.06-7.7h-2.2v7c0 .83-.67 1.5-1.5 1.5H18.5c-.83 0-1.5-.67-1.5-1.5V13.5Zm5.5 3.9v5.7h3.75c1.68 0 2.75-.92 2.75-2.7 0-1.77-1.07-3-2.75-3h-3.75Z"
-                fill="url(#replay-logo-accent)"
+                d="M18 14.5c0-1.38 1.12-2.5 2.5-2.5h9.5c5.02 0 8.5 2.85 8.5 7.32 0 3.43-1.84 5.68-4.93 6.53l4.84 6.86c.52.74-.02 1.79-.93 1.79h-3.48a1.6 1.6 0 0 1-1.29-.65l-5.2-7.14h-2.68v6.29c0 .88-.72 1.6-1.6 1.6H20.5c-.88 0-1.6-.72-1.6-1.6Zm5.5 3.8v4.82h4.2c1.87 0 3.05-.94 3.05-2.64 0-1.7-1.18-2.18-3.05-2.18Z"
+                fill="#f8fafc"
             />
             <path
-                d="M27.8 27.8h2.34a1.5 1.5 0 0 1 1.31.78l3.92 7.3H29.9a1.5 1.5 0 0 1-1.32-.79l-2.58-4.9c-.45-.87.18-1.94 1.16-1.94Z"
-                fill="#1d4ed8"
-                fillOpacity="0.55"
+                d="M27.7 26.2h2.06c.5 0 .96.26 1.21.68l3.58 6.01H28.5a1.4 1.4 0 0 1-1.15-.61l-2.28-3.34c-.58-.86.1-1.74.63-1.74Z"
+                fill="#38bdf8"
             />
+            <circle cx="17" cy="17" r="3" fill="#38bdf8" opacity="0.35" />
         </svg>
     );
 }
@@ -180,6 +169,7 @@ export default function SessionReplay({ sessionId }) {
     const [activeEventId, setActiveEventId] = useState(null);
     const [panelView, setPanelView] = useState("timeline");
     const [selectedTraceId, setSelectedTraceId] = useState(null);
+    const [collapsedGroups, setCollapsedGroups] = useState({});
 
     const rrwebFirstTsRef = useRef(null);
     const clockOffsetRef = useRef(0);
@@ -187,25 +177,27 @@ export default function SessionReplay({ sessionId }) {
     useEffect(() => {
         setPanelView("timeline");
         setSelectedTraceId(null);
+        setShowAll(false);
+        setCollapsedGroups({});
     }, [sessionId]);
+
+    useEffect(() => {
+        setCollapsedGroups({});
+    }, [showAll]);
 
     useEffect(() => {
         if (!traceEntries.length) {
             setSelectedTraceId(null);
             return;
         }
-        if (!selectedTraceId) {
-            setSelectedTraceId(traceEntries[0].id);
+        if (selectedTraceId && !traceEntries.find((entry) => entry.id === selectedTraceId)) {
+            setSelectedTraceId(null);
         }
     }, [traceEntries, selectedTraceId]);
 
     const selectedTrace = useMemo(() => {
-        if (!traceEntries.length) return null;
-        if (selectedTraceId) {
-            const found = traceEntries.find((entry) => entry.id === selectedTraceId);
-            if (found) return found;
-        }
-        return traceEntries[0];
+        if (!traceEntries.length || !selectedTraceId) return null;
+        return traceEntries.find((entry) => entry.id === selectedTraceId) || null;
     }, [traceEntries, selectedTraceId]);
 
     const traceTitle = selectedTrace
@@ -217,11 +209,15 @@ export default function SessionReplay({ sessionId }) {
         if (traceStatus === "error") return "Failed to load traces";
         if (traceEntries.length) {
             const count = traceEntries.length;
-            return `${count} trace${count === 1 ? "" : "s"}`;
+            const suffix = count === 1 ? "trace" : "traces";
+            if (!selectedTraceId) {
+                return `${count} ${suffix} • Select to inspect`;
+            }
+            return `${count} ${suffix}`;
         }
         if (traceStatus === "ready") return "No traces captured";
         return "Trace inspector";
-    }, [traceEntries.length, traceStatus]);
+    }, [traceEntries.length, traceStatus, selectedTraceId]);
 
     // ---- sizing helpers (content-box) ----
     const measureContainerSize = React.useCallback(() => {
@@ -296,6 +292,19 @@ export default function SessionReplay({ sessionId }) {
             return;
         }
 
+        iframe.style.backgroundColor = "#ffffff";
+        try {
+            const doc = iframe.contentDocument || iframe.contentWindow?.document;
+            if (doc?.documentElement) {
+                doc.documentElement.style.backgroundColor = "#ffffff";
+            }
+            if (doc?.body) {
+                doc.body.style.backgroundColor = "#ffffff";
+            }
+        } catch (err) {
+            warn(`${tag}: unable to set iframe background`, err);
+        }
+
         const scale = Math.min(cont.width / intrinsic.width, cont.height / intrinsic.height, 1); // cap at 1 (no upscale)
         const scaledW = Math.round(intrinsic.width * scale);
         const scaledH = Math.round(intrinsic.height * scale);
@@ -315,11 +324,15 @@ export default function SessionReplay({ sessionId }) {
             wrapper.style.width = `${scaledW}px`;
             wrapper.style.height = `${scaledH}px`;
             wrapper.style.overflow = "hidden";
+            wrapper.style.background = "#ffffff";
         }
 
         // container should hide overflow as well
         const root = containerRef.current;
-        if (root) root.style.overflow = "hidden";
+        if (root) {
+            root.style.overflow = "hidden";
+            root.style.background = "#ffffff";
+        }
 
         log(`${tag}: applyFitContain`, { container: cont, intrinsic, scale, scaled: { w: scaledW, h: scaledH } });
     }, [findIframe, measureContainerSize, measureIframeContentSize]);
@@ -380,6 +393,16 @@ export default function SessionReplay({ sessionId }) {
     }, [ticks, showAll, absNow]);
 
     const renderGroups = useMemo(() => groupByAction(baseItems), [baseItems]);
+
+    const timelineSummaryText = useMemo(() => {
+        if (!renderGroups.length) {
+            return showAll ? "No backend events" : "No contextual events";
+        }
+        const total = renderGroups.reduce((sum, group) => sum + group.items.length, 0);
+        const actionLabel = renderGroups.length === 1 ? "action" : "actions";
+        const eventLabel = total === 1 ? "event" : "events";
+        return `${total} ${eventLabel} across ${renderGroups.length} ${actionLabel}`;
+    }, [renderGroups, showAll]);
 
     // ---- bootstrap rrweb ----
     useEffect(() => {
@@ -572,6 +595,58 @@ export default function SessionReplay({ sessionId }) {
         return Math.max(0, Math.min(total || 0, rrMs));
     }
 
+    const findTraceForEvent = React.useCallback(
+        (ev) => {
+            if (!ev || !traceEntries.length) return null;
+            const meta = ev.meta || {};
+            const traceHints = [
+                meta.traceId,
+                meta.trace_id,
+                meta.requestTraceId,
+                meta.requestRid,
+                meta.rid,
+                meta.id,
+            ].filter(Boolean);
+
+            for (const hint of traceHints) {
+                const direct = traceEntries.find(
+                    (entry) =>
+                        entry.id === hint ||
+                        entry.requestRid === hint ||
+                        entry.request?.traceId === hint ||
+                        entry.request?.requestRid === hint ||
+                        entry.request?.rid === hint
+                );
+                if (direct) return direct;
+            }
+
+            const keyMatches = [meta.key, meta.urlKey, meta.name].filter(Boolean);
+            for (const key of keyMatches) {
+                const match = traceEntries.find(
+                    (entry) => entry.label === key || entry.request?.key === key || entry.groupKey === key
+                );
+                if (match) return match;
+            }
+
+            if (meta.method && meta.url) {
+                const method = String(meta.method).toUpperCase();
+                const url = String(meta.url);
+                const match = traceEntries.find((entry) => {
+                    const req = entry.request || {};
+                    return (
+                        req.method && req.url &&
+                        String(req.method).toUpperCase() === method &&
+                        String(req.url) === url
+                    );
+                });
+                if (match) return match;
+            }
+
+            return null;
+        },
+        [traceEntries]
+    );
+
     function jumpToEvent(ev) {
         const rep = replayerRef.current;
         if (!rep) return;
@@ -591,6 +666,14 @@ export default function SessionReplay({ sessionId }) {
                 const el = document.getElementById(`event-${key}`);
                 if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
             });
+        }
+
+        if (ev.kind === "request") {
+            const matchedTrace = findTraceForEvent(ev);
+            if (matchedTrace) {
+                setSelectedTraceId(matchedTrace.id);
+                setPanelView("trace");
+            }
         }
     }
 
@@ -652,10 +735,18 @@ export default function SessionReplay({ sessionId }) {
     const hoverPosition = hoveredMarker ? Math.min(92, Math.max(8, hoveredMarker.position * 100)) : 0;
 
     const KIND_COLORS = {
-        action: "bg-amber-400",
-        request: "bg-sky-500",
-        db: "bg-emerald-400",
-        email: "bg-fuchsia-400",
+        action: "bg-amber-500",
+        request: "bg-blue-500",
+        db: "bg-cyan-500",
+        email: "bg-violet-500",
+    };
+
+    const KIND_ACCENT_COLORS = {
+        action: "#f59e0b",
+        request: "#2563eb",
+        db: "#0891b2",
+        email: "#7c3aed",
+        default: "#94a3b8",
     };
 
     const KIND_ICON_COMPONENTS = {
@@ -695,475 +786,483 @@ export default function SessionReplay({ sessionId }) {
         return <Icon className={`h-4 w-4 ${className}`} />;
     }
 
-    return (
-        <div className="min-h-screen bg-slate-900 text-slate-100">
-            <div className="relative flex min-h-screen flex-col overflow-hidden">
-                <div className="pointer-events-none absolute inset-0">
-                    <div className="absolute -left-28 top-[-8%] h-80 w-80 rounded-full bg-sky-400/30 blur-3xl" />
-                    <div className="absolute bottom-[-18%] right-[-12%] h-96 w-96 rounded-full bg-fuchsia-400/20 blur-[150px]" />
+    const playbackSection = (
+        <section className="flex min-h-0 flex-col rounded-3xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+                <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">Playback</p>
+                    <h2 className="text-lg font-semibold tracking-tight text-slate-900">User session replay</h2>
                 </div>
-                <header className="relative z-10 flex flex-wrap items-center justify-between gap-6 px-8 py-6 sm:px-12">
-                    <div className="flex items-center gap-4">
-                        <LogoMark className="h-12 w-12 drop-shadow-xl" />
-                        <div>
-                            <p className="text-xs uppercase tracking-[0.4em] text-slate-300">Replay console</p>
-                            <h1 className="text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl">Session {sessionId ?? "—"}</h1>
-                        </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-4 text-xs uppercase tracking-[0.25em] text-slate-300">
-                        <div className="inline-flex rounded-full border border-slate-600/60 bg-slate-800/60 p-1 shadow-lg backdrop-blur">
-                            <button
-                                type="button"
-                                onClick={() => setPanelView("timeline")}
-                                className={`rounded-full px-4 py-2 font-semibold transition ${panelView === "timeline" ? "bg-slate-700/60 text-slate-100" : "text-slate-300 hover:text-slate-100"}`}
-                            >
-                                Timeline
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setPanelView("trace")}
-                                className={`rounded-full px-4 py-2 font-semibold transition ${panelView === "trace" ? "bg-slate-700/60 text-slate-100" : "text-slate-300 hover:text-slate-100"}`}
-                            >
-                                Function trace
-                            </button>
-                        </div>
-                        <span className="text-[11px] uppercase tracking-[0.3em] text-slate-300">{traceSummaryText}</span>
-                    </div>
-                </header>
-                <div className="relative z-10 flex flex-1 flex-col">
-                    <div
-                        className={`grid min-h-0 flex-1 overflow-hidden ${
-                            panelView === "trace"
-                                ? "grid-cols-1"
-                                : "grid-cols-[minmax(0,1.65fr)_minmax(0,1.05fr)]"
+                <div className="flex items-center gap-3 text-xs text-slate-600">
+                    <span
+                        className={`inline-flex items-center gap-2 rounded-full px-3 py-1 font-medium capitalize ${
+                            playerStatus === "playing"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : playerStatus === "paused"
+                                    ? "bg-amber-100 text-amber-700"
+                                    : playerStatus === "loading"
+                                        ? "bg-sky-100 text-sky-700"
+                                        : playerStatus === "error"
+                                            ? "bg-rose-100 text-rose-700"
+                                            : "bg-slate-100 text-slate-600"
                         }`}
                     >
-                        <section
-                            className={`flex min-h-0 flex-col border-r border-slate-800/60 bg-slate-900/80 backdrop-blur ${
-                                panelView === "trace" ? "hidden" : ""
-                            }`}
-                        >
-                            <div className="flex items-center justify-between border-b border-slate-800/50 px-6 py-4">
-                                <div>
-                                    <p className="text-xs uppercase tracking-[0.3em] text-slate-300">Playback</p>
-                                    <h2 className="text-lg font-semibold tracking-tight text-slate-100">User session replay</h2>
-                                </div>
-                                <div className="flex items-center gap-3 text-xs text-slate-300">
-              <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 font-medium ${
-                  playerStatus === "playing" ? "bg-emerald-500/10 text-emerald-300" :
-                      playerStatus === "paused" ? "bg-amber-500/10 text-amber-300" :
-                          playerStatus === "loading" ? "bg-sky-500/10 text-sky-300" :
-                              playerStatus === "error" ? "bg-rose-500/10 text-rose-300" :
-                                  "bg-slate-700/20 text-slate-300"}`}>
-                <span className="h-2 w-2 rounded-full bg-current" />
-                  {playerStatus}
-              </span>
-                            <span>{formatTime(currentTime)} / {formatTime(playerMeta.totalTime)}</span>
+                        <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                        {playerStatus}
+                    </span>
+                    <span className="font-medium text-slate-500">
+                        {formatTime(currentTime)} / {formatTime(playerMeta.totalTime)}
+                    </span>
+                </div>
+            </div>
+
+            <div className="relative flex-1 min-h-0 px-6 pb-6 pt-4">
+                <div
+                    ref={containerRef}
+                    className="h-full w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-inner"
+                />
+                {playerStatus === "loading" && (
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                        <div className="rounded-full border border-slate-200 bg-white/95 px-6 py-3 text-sm text-slate-600 shadow-md">
+                            Preparing replay…
                         </div>
                     </div>
-
-                    <div className="relative flex-1 min-h-0 px-6 pb-6 pt-4">
-                        <div
-                            ref={containerRef}
-                            className="h-full w-full overflow-hidden rounded-2xl border border-slate-800/40 bg-slate-900/75 shadow-2xl"
-                        />
-                        {playerStatus === "loading" && (
-                            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                                <div className="rounded-full border border-slate-800/80 bg-slate-900/80 px-6 py-3 text-sm text-slate-300 shadow-xl">
-                                    Preparing replay…
-                                </div>
-                            </div>
-                        )}
-                        {playerStatus === "error" && (
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="max-w-sm rounded-xl border border-rose-500/40 bg-rose-500/10 px-6 py-4 text-sm text-rose-200">
-                                    Unable to load session replay. Please try again.
-                                </div>
-                            </div>
-                        )}
-                        {playerStatus === "no-rrweb" && (
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="max-w-sm rounded-xl border border-amber-500/40 bg-amber-500/10 px-6 py-4 text-sm text-amber-100">
-                                    No rrweb events (or too few) were captured for this session.
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="border-t border-slate-800/60 bg-slate-900/85 px-6 py-5">
-                        <div className="mb-4 flex items-center gap-3 text-sm">
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    const rep = replayerRef.current;
-                                    if (!rep) return;
-                                    if (playerStatus === "playing") {
-                                        const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
-                                        lastPausedTimeRef.current = now;
-                                        rep.pause();
-                                        setPlayerStatus("paused");
-                                    } else if (playerStatus !== "error" && playerStatus !== "loading") {
-                                        const resumeAt =
-                                            Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
-                                                ? lastPausedTimeRef.current : (rep.getCurrentTime?.() ?? currentTime ?? 0);
-                                        rep.play(resumeAt);
-                                        setPlayerStatus("playing");
-                                    }
-                                }}
-                                className="inline-flex items-center gap-2 rounded-full border border-slate-800/60 bg-slate-900 px-4 py-2 font-medium text-slate-100 transition hover:border-slate-700 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                            >
-                <span className="text-xs uppercase tracking-[0.2em] text-slate-300">
-                  {playerStatus === "playing" ? "Pause" : "Play"}
-                </span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    const rep = replayerRef.current;
-                                    if (!rep) return;
-                                    rep.pause();
-                                    lastPausedTimeRef.current = 0;
-                                    rep.play(0);
-                                    setPlayerStatus("playing");
-                                    setCurrentTime(0);
-                                }}
-                                className="inline-flex items-center gap-2 rounded-full border border-slate-700/60 bg-slate-900 px-4 py-2 text-xs uppercase tracking-[0.2em] text-slate-300 transition hover:border-slate-600 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                            >
-                                Restart
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => applyFitContain("manual-fit")}
-                                className="ml-2 inline-flex items-center gap-2 rounded-full border border-slate-700/60 bg-slate-900 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300"
-                            >
-                                Refit Now (log)
-                            </button>
-                            <div className="ml-auto text-xs text-slate-300">
-                                {playerStatus === "paused" ? "paused" : "live"}
-                            </div>
+                )}
+                {playerStatus === "error" && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="max-w-sm rounded-xl border border-rose-200 bg-rose-50 px-6 py-4 text-sm text-rose-600 shadow-sm">
+                            Unable to load session replay. Please try again.
                         </div>
+                    </div>
+                )}
+                {playerStatus === "no-rrweb" && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="max-w-sm rounded-xl border border-amber-200 bg-amber-50 px-6 py-4 text-sm text-amber-600 shadow-sm">
+                            No rrweb events (or too few) were captured for this session.
+                        </div>
+                    </div>
+                )}
+            </div>
 
-                        {/* Timeline (markers above input; input Z lower so markers are clickable) */}
-                        <div className="relative h-20">
-                            {/* Track + progress */}
-                            <div className="absolute inset-x-0 top-1/2 -translate-y-1/2">
-                                <div className="relative h-2 w-full rounded-full bg-slate-800/80">
-                                    <div
-                                        className="absolute inset-y-0 left-0 rounded-full bg-sky-500/70"
-                                        style={{ width: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%` }}
-                                    />
-                                </div>
+            <div className="border-t border-slate-200 px-6 py-5">
+                <div className="mb-4 flex items-center gap-3 text-sm text-slate-600">
+                    <button
+                        type="button"
+                        onClick={() => {
+                            const rep = replayerRef.current;
+                            if (!rep) return;
+                            if (playerStatus === "playing") {
+                                const now = rep.getCurrentTime?.() ?? currentTime ?? 0;
+                                lastPausedTimeRef.current = now;
+                                rep.pause();
+                                setPlayerStatus("paused");
+                            } else if (playerStatus !== "error" && playerStatus !== "loading") {
+                                const resumeAt =
+                                    Number.isFinite(lastPausedTimeRef.current) && lastPausedTimeRef.current >= 0
+                                        ? lastPausedTimeRef.current
+                                        : rep.getCurrentTime?.() ?? currentTime ?? 0;
+                                rep.play(resumeAt);
+                                setPlayerStatus("playing");
+                            }
+                        }}
+                        className="inline-flex items-center gap-2 rounded-full border border-slate-900 bg-slate-900 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 focus:ring-offset-white"
+                    >
+                        <span>{playerStatus === "playing" ? "Pause" : "Play"}</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            const rep = replayerRef.current;
+                            if (!rep) return;
+                            rep.pause();
+                            lastPausedTimeRef.current = 0;
+                            rep.play(0);
+                            setPlayerStatus("playing");
+                            setCurrentTime(0);
+                        }}
+                        className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-600 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 focus:ring-offset-white"
+                    >
+                        Restart
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => applyFitContain("manual-fit")}
+                        className="ml-2 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 hover:bg-slate-100"
+                    >
+                        Refit Now (log)
+                    </button>
+                    <div className="ml-auto text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                        {playerStatus === "paused" ? "paused" : "live"}
+                    </div>
+                </div>
 
-                                {/* Markers overlay (on top) */}
-                                <div className="pointer-events-none absolute inset-0 z-50">
-                                    {timelineMarkers.map((marker) => {
-                                        const event = marker.event;
-                                        const isActive = activeEventId && event.__key === activeEventId;
-                                        const eventTime = alignedSeekMsFor(event);
-                                        const markerTitle = getMarkerTitle(event);
-                                        return (
-                                            <button
-                                                key={marker.key || marker.position}
-                                                type="button"
-                                                className={`pointer-events-auto absolute top-1/2 flex h-8 w-8 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border border-slate-950/70 text-slate-950 shadow transition focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 focus:ring-offset-slate-950 ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "scale-110 ring-2 ring-sky-400/80" : "hover:scale-110"}`}
-                                                style={{left: `${marker.position * 100}%`}}
-                                                onClick={() => jumpToEvent(event)}
-                                                onMouseEnter={() => setHoveredMarker(marker)}
-                                                onMouseLeave={() => setHoveredMarker(null)}
-                                                onFocus={() => setHoveredMarker(marker)}
-                                                onBlur={() => setHoveredMarker(null)}
-                                                title={`${event.kind || "event"} • ${markerTitle}${eventTime != null ? ` • ${formatMaybeTime(eventTime)}` : ""}`}
-                                            >
-                                                <MarkerIcon kind={event.kind} className="text-slate-950"/>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-
-                                {/* Scrubber knob visual (above track but below markers) */}
-                                <div
-                                    className="absolute z-40 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-sky-400 bg-slate-950 shadow-[0_0_0_4px_rgba(56,189,248,0.15)] transition"
-                                    style={{
-                                        left: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%`,
-                                        transform: "translate(-50%, -50%)"
-                                    }}
-                                />
-                            </div>
-
-                            {/* Input slider (under markers; still functional) */}
-                            <input
-                                type="range"
-                                min={0}
-                                max={playerMeta.totalTime || replayerRef.current?.getMetaData?.().totalTime || 0}
-                                value={currentTime}
-                                onChange={(e) => {
-                                    const rep = replayerRef.current;
-                                    const newTime = Number(e.target.value);
-                                    if (!rep) return;
-                                    rep.pause();
-                                    lastPausedTimeRef.current = newTime;
-                                    rep.play(newTime);
-                                    setPlayerStatus("playing");
-                                    setCurrentTime(newTime);
-                                }}
-                                className="timeline-slider absolute inset-0 z-30 appearance-none bg-transparent"
-                                // Tailwind can’t style the native track/thumb cross-browser; ensure CSS sets no huge hitbox.
+                <div className="relative h-20">
+                    <div className="absolute inset-x-0 top-1/2 -translate-y-1/2">
+                        <div className="relative h-2 w-full rounded-full bg-slate-200">
+                            <div
+                                className="absolute inset-y-0 left-0 rounded-full bg-sky-400"
+                                style={{ width: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%` }}
                             />
+                        </div>
 
-                            {/* Hover card */}
-                            {hoveredMarker && (() => {
-                                const { event } = hoveredMarker;
-                                const x = Math.min(92, Math.max(8, hoveredMarker.position * 100));
-                                const sub = getMarkerMeta(event);
+                        <div className="pointer-events-none absolute inset-0 z-50">
+                            {timelineMarkers.map((marker) => {
+                                const event = marker.event;
+                                const isActive = activeEventId && event.__key === activeEventId;
+                                const eventTime = alignedSeekMsFor(event);
+                                const markerTitle = getMarkerTitle(event);
                                 return (
-                                    <div
-                                        className="pointer-events-none absolute z-50 -translate-x-1/2 rounded-xl border border-slate-800/60 bg-slate-900/95 px-3 py-2 text-xs text-slate-100 shadow-2xl backdrop-blur"
-                                        style={{ left: `${x}%`, bottom: "calc(50% + 24px)" }}
+                                    <button
+                                        key={marker.key || marker.position}
+                                        type="button"
+                                        className={`pointer-events-auto absolute top-1/2 flex h-8 w-8 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border border-white text-slate-900 shadow-md transition focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-offset-2 focus:ring-offset-white ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "scale-110 ring-2 ring-sky-300" : "hover:scale-110"}`}
+                                        style={{ left: `${marker.position * 100}%` }}
+                                        onClick={() => jumpToEvent(event)}
+                                        onMouseEnter={() => setHoveredMarker(marker)}
+                                        onMouseLeave={() => setHoveredMarker(null)}
+                                        onFocus={() => setHoveredMarker(marker)}
+                                        onBlur={() => setHoveredMarker(null)}
+                                        title={`${event.kind || "event"} • ${markerTitle}${eventTime != null ? ` • ${formatMaybeTime(eventTime)}` : ""}`}
                                     >
-                                        <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.25em] text-slate-300">
-                                            <span className={`h-2 w-2 rounded-full ${KIND_COLORS[event.kind] || "bg-slate-500"}`} />
-                                            {event.kind}
-                                        </div>
-                                        <div className="mt-1 text-sm font-medium leading-snug text-slate-100 break-words">
-                                            {getMarkerTitle(event)}
-                                        </div>
-                                        {sub && (
-                                            <div className="mt-1 text-[11px] uppercase tracking-[0.3em] text-slate-300">
-                                                {sub}
-                                            </div>
-                                        )}
-                                        <div className="mt-1 text-[11px] text-slate-300">
-                                            {formatMaybeTime(alignedSeekMsFor(event))} rrweb • @{event._t ?? "—"}
-                                        </div>
-                                    </div>
+                                        <MarkerIcon kind={event.kind} className="text-white" />
+                                    </button>
                                 );
-                            })()}
+                            })}
                         </div>
-                    </div>
-                </section>
 
-                <aside
-                    className={`flex h-full min-h-0 flex-col overflow-hidden backdrop-blur ${
-                        panelView === "trace" ? "bg-slate-900/80" : "bg-slate-900/70"
-                    }`}
-                >
-                    <div className="border-b border-slate-800/50 px-6 py-4">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                                <p className="text-xs uppercase tracking-[0.3em] text-slate-300">{panelView === "timeline" ? "Timeline" : "Function trace"}</p>
-                                <h2 className="text-sm font-semibold text-slate-100">
-                                    {panelView === "timeline"
-                                        ? showAll ? "All backend events" : "Contextual backend events"
-                                        : traceTitle}
-                                </h2>
-                            </div>
-                            {panelView === "timeline" ? (
-                                <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-300">
-                                    <input
-                                        type="checkbox"
-                                        checked={showAll}
-                                        onChange={(e) => setShowAll(e.target.checked)}
-                                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-sky-400 focus:ring-sky-400"
-                                    />
-                                    Show all
-                                </label>
-                            ) : (
-                                <span className="text-[11px] uppercase tracking-[0.25em] text-slate-300">{traceSummaryText}</span>
-                            )}
-                        </div>
-                        {panelView === "trace" && (
-                            <p className="mt-2 text-xs text-slate-300">
-                                Select a request to explore its captured function trace.
-                            </p>
-                        )}
+                        <div
+                            className="absolute top-1/2 z-40 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-sky-400 bg-white shadow-[0_0_0_3px_rgba(56,189,248,0.18)] transition"
+                            style={{
+                                left: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%`,
+                                transform: "translate(-50%, -50%)",
+                            }}
+                        />
                     </div>
 
-                    <div className={`flex-1 overflow-y-auto px-6 py-6 min-h-0 ${panelView !== "timeline" ? "hidden" : ""}`}>
-                        {!renderGroups.length && (
-                            <div className="text-xs text-slate-300">
-                                No backend timeline data for this session.
+                    <input
+                        type="range"
+                        min={0}
+                        max={playerMeta.totalTime || replayerRef.current?.getMetaData?.().totalTime || 0}
+                        value={currentTime}
+                        onChange={(e) => {
+                            const rep = replayerRef.current;
+                            const newTime = Number(e.target.value);
+                            if (!rep) return;
+                            rep.pause();
+                            lastPausedTimeRef.current = newTime;
+                            rep.play(newTime);
+                            setPlayerStatus("playing");
+                            setCurrentTime(newTime);
+                        }}
+                        className="timeline-slider absolute inset-0 z-30 appearance-none bg-transparent"
+                    />
+
+                    {hoveredMarker && (() => {
+                        const { event } = hoveredMarker;
+                        const x = Math.min(92, Math.max(8, hoveredMarker.position * 100));
+                        const sub = getMarkerMeta(event);
+                        return (
+                            <div
+                                className="pointer-events-none absolute z-50 -translate-x-1/2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-xl"
+                                style={{ left: `${x}%`, bottom: "calc(50% + 24px)" }}
+                            >
+                                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.25em] text-slate-500">
+                                    <span className={`h-2 w-2 rounded-full ${KIND_COLORS[event.kind] || "bg-slate-500"}`} />
+                                    {event.kind}
+                                </div>
+                                <div className="mt-1 text-sm font-medium leading-snug text-slate-900 break-words">{getMarkerTitle(event)}</div>
+                                {sub && <div className="mt-1 text-[11px] uppercase tracking-[0.3em] text-slate-400">{sub}</div>}
+                                <div className="mt-1 text-[11px] text-slate-500">{formatMaybeTime(alignedSeekMsFor(event))} rrweb • @{event._t ?? "—"}</div>
                             </div>
-                        )}
+                        );
+                    })()}
+                </div>
+            </div>
+        </section>
+    );
 
-                        <div className="space-y-5">
-                            {renderGroups.map((g, gi) => {
-                                const action = g.items.find((it) => it.kind === "action");
-                                const title = action?.label || action?.actionId || "Other events";
-                                const startAligned = action ? serverToRrwebOffsetMs(action.tStart) : null;
-                                const endAligned = action ? serverToRrwebOffsetMs(action.tEnd) : null;
-                                const windowLabel = action ? `${formatMaybeTime(startAligned)} → ${formatMaybeTime(endAligned)}` : null;
+    const timelinePanel = (
+        <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-6 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">Timeline</p>
+                        <h2 className="text-sm font-semibold text-slate-900">
+                            {showAll ? "All backend events" : "Contextual backend events"}
+                        </h2>
+                    </div>
+                    <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                        <input
+                            type="checkbox"
+                            checked={showAll}
+                            onChange={(e) => setShowAll(e.target.checked)}
+                            className="h-4 w-4 rounded border-slate-300 text-sky-500 focus:ring-sky-400"
+                        />
+                        Show all
+                    </label>
+                </div>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6">
+                {!renderGroups.length && (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-xs text-slate-500">
+                        No backend timeline data for this session.
+                    </div>
+                )}
 
-                                return (
-                                    <div
-                                        key={g.id || gi}
-                                        className="rounded-2xl border border-slate-800/50 bg-slate-900/65 shadow-lg backdrop-blur"
-                                    >
-                                        <div className="flex items-center justify-between border-b border-slate-800/50 px-4 py-3">
-                                            <div>
-                                                <div className="text-sm font-semibold text-slate-100">{title}</div>
-                                                {windowLabel && (
-                                                    <div className="text-xs text-slate-300">{windowLabel}</div>
-                                                )}
-                                            </div>
-                                            <div className="text-[11px] uppercase tracking-[0.25em] text-slate-300">
-                                                {g.items.length} events
-                                            </div>
-                                        </div>
+                <div className="space-y-5">
+                    {renderGroups.map((g, gi) => {
+                        const groupKey = g.id || `group-${gi}`;
+                        const isCollapsed = Boolean(collapsedGroups[groupKey]);
+                        const action = g.items.find((it) => it.kind === "action");
+                        const title = action?.label || action?.actionId || "Other events";
+                        const startAligned = action ? serverToRrwebOffsetMs(action.tStart) : null;
+                        const endAligned = action ? serverToRrwebOffsetMs(action.tEnd) : null;
+                        const windowLabel = action ? `${formatMaybeTime(startAligned)} → ${formatMaybeTime(endAligned)}` : null;
 
-                                        <div className="space-y-3 px-4 py-3">
-                                            {g.items.map((e, i) => {
-                                                const aligned = toRrwebTime(e._t);
-                                                const isActive = activeEventId && e.__key === activeEventId;
-                                                return (
-                                                    <div
-                                                        key={e.__key || i}
-                                                        id={e.__key ? `event-${e.__key}` : undefined}
-                                                        role="button"
-                                                        tabIndex={0}
-                                                        onClick={() => jumpToEvent(e)}
-                                                        onKeyDown={(k) => (k.key === "Enter" || k.key === " ") && jumpToEvent(e)}
-                                                        className={`group relative overflow-hidden rounded-xl border px-3 py-3 text-sm transition focus:outline-none focus:ring-2 focus:ring-sky-500 ${
-                                                            isActive
-                                                                ? "border-sky-500/60 bg-sky-500/10"
-                                                                : "border-slate-700/50 bg-slate-900/45 hover:border-slate-600 hover:bg-slate-900/65"
-                                                        }`}
-                                                    >
-                                                        <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-slate-300">
+                        return (
+                            <div key={groupKey} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        setCollapsedGroups((prev) => {
+                                            const next = { ...prev };
+                                            next[groupKey] = !isCollapsed;
+                                            return next;
+                                        })
+                                    }
+                                    aria-expanded={!isCollapsed}
+                                    className="flex w-full items-start justify-between gap-3 border-b border-slate-200 px-4 py-4 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-offset-2 focus:ring-offset-white"
+                                >
+                                    <div>
+                                        <div className="text-sm font-semibold text-slate-900">{title}</div>
+                                        {windowLabel && <div className="text-xs text-slate-500">{windowLabel}</div>}
+                                    </div>
+                                    <div className="flex items-center gap-3 text-[11px] uppercase tracking-[0.25em] text-slate-400">
+                                        <span>{g.items.length} events</span>
+                                        <span aria-hidden className="text-base text-slate-400">{isCollapsed ? "▸" : "▾"}</span>
+                                    </div>
+                                </button>
+
+                                {!isCollapsed && (
+                                    <div className="space-y-3 bg-slate-50/70 px-4 py-4">
+                                        {g.items.map((e, i) => {
+                                            const aligned = toRrwebTime(e._t);
+                                            const isActive = activeEventId && e.__key === activeEventId;
+                                            const matchTrace = e.kind === "request" ? findTraceForEvent(e) : null;
+                                            const borderColor = KIND_ACCENT_COLORS[e.kind] || KIND_ACCENT_COLORS.default;
+
+                                            return (
+                                                <button
+                                                    key={e.__key || i}
+                                                    id={e.__key ? `event-${e.__key}` : undefined}
+                                                    type="button"
+                                                    onClick={() => jumpToEvent(e)}
+                                                    className={`group relative w-full rounded-2xl border border-slate-100 border-l-[4px] bg-white px-5 py-4 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-offset-2 focus:ring-offset-white ${
+                                                        isActive ? "border-sky-200 bg-sky-50 shadow-sm" : "hover:border-slate-200 hover:bg-slate-50"
+                                                    }`}
+                                                    style={{ borderLeftColor: borderColor }}
+                                                >
+                                                    <div className="flex flex-col gap-3">
+                                                        <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-slate-500">
                                                             <span className="flex items-center gap-2">
                                                                 <span className={`h-2 w-2 rounded-full ${KIND_COLORS[e.kind] || "bg-slate-500"}`} />
                                                                 {e.kind}
                                                             </span>
                                                             <span>
-                                @{e._t ?? "—"} • {typeof aligned === "number" ? `${Math.round(aligned)}ms` : "—"}
-                              </span>
+                                                                @{e._t ?? "—"} • {typeof aligned === "number" ? `${Math.round(aligned)}ms` : "—"}
+                                                            </span>
                                                         </div>
 
                                                         {e.kind === "request" && (
-                                                            <div className="space-y-1">
-                                                                <div className="font-mono text-xs text-slate-100">
+                                                            <div className="space-y-1 text-xs text-slate-600">
+                                                                <div className="font-mono text-xs text-slate-900">
                                                                     {e.meta?.method} {e.meta?.url}
                                                                 </div>
-                                                                <div className="text-xs text-slate-300">
-                                                                    status {e.meta?.status} • {e.meta?.durMs}ms
+                                                                <div className="flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.25em] text-slate-400">
+                                                                    <span>Status {e.meta?.status ?? "—"}</span>
+                                                                    <span>{e.meta?.durMs != null ? `${e.meta?.durMs}ms` : "—"}</span>
+                                                                    {matchTrace && <span className="text-sky-600">Trace available</span>}
                                                                 </div>
                                                             </div>
                                                         )}
                                                         {e.kind === "db" && (
-                                                            <div className="space-y-2 text-xs text-slate-300">
-                                                                <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-slate-300">
+                                                            <div className="space-y-2 text-xs text-slate-600">
+                                                                <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-slate-500">
                                                                     {e.meta?.collection} • {e.meta?.op}
                                                                 </div>
                                                                 {e.meta?.query && (
-                                                                    <pre className="max-h-36 overflow-auto rounded-lg bg-slate-900/70 p-3 text-[11px] leading-relaxed text-slate-200">
+                                                                    <pre className="max-h-36 overflow-auto rounded-lg border border-slate-200 bg-slate-100 p-3 text-[11px] leading-relaxed text-slate-700">
                                                                         {JSON.stringify(e.meta.query, null, 2)}
                                                                     </pre>
                                                                 )}
                                                                 {e.meta?.resultMeta && (
-                                                                    <div className="text-[11px] text-slate-300">
-                                                                        result {JSON.stringify(e.meta.resultMeta)}
-                                                                    </div>
+                                                                    <div className="text-[11px] text-slate-500">result {JSON.stringify(e.meta.resultMeta)}</div>
                                                                 )}
                                                             </div>
                                                         )}
                                                         {e.kind === "action" && (
-                                                            <div className="space-y-1 text-xs text-slate-100">
-                                                                <div className="font-mono text-sm">{e.label || e.actionId}</div>
+                                                            <div className="space-y-1 text-xs text-slate-600">
+                                                                <div className="font-mono text-sm text-slate-900">{e.label || e.actionId}</div>
                                                                 {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
-                                                                    <div className="text-[11px] text-slate-300">
-                                                                        [{e.tStart ?? "—"} … {e.tEnd ?? "—"}]
-                                                                    </div>
+                                                                    <div className="text-[11px] text-slate-500">[{e.tStart ?? "—"} … {e.tEnd ?? "—"}]</div>
                                                                 )}
                                                             </div>
                                                         )}
                                                         {e.kind === "email" && (
-                                                            <div className="text-xs text-slate-100">
+                                                            <div className="text-xs text-slate-600">
                                                                 <EmailItem meta={e.meta} />
                                                             </div>
                                                         )}
                                                     </div>
-                                                );
-                                            })}
-                                        </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+
+                    {!renderGroups.length && !showAll && (
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
+                            No events near the current time. Try <button className="font-medium text-sky-600 underline" onClick={() => setShowAll(true)}>showing all</button>.
+                        </div>
+                    )}
+                </div>
+            </div>
+        </aside>
+    );
+
+    const tracePanel = (
+        <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-6 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">Function trace</p>
+                        <h2 className="text-sm font-semibold text-slate-900">{traceTitle}</h2>
+                    </div>
+                    <span className="text-[11px] uppercase tracking-[0.25em] text-slate-500">{traceSummaryText}</span>
+                </div>
+                <p className="mt-2 text-xs text-slate-500">Select a request to explore its captured function trace.</p>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6">
+                <div className="flex h-full min-h-0 flex-col gap-4">
+                    {traceStatus === "loading" && !traceEntries.length && (
+                        <div className="flex flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50">
+                            <div className="animate-pulse text-xs text-slate-500">Fetching trace data…</div>
+                        </div>
+                    )}
+                    {traceStatus === "error" && !traceEntries.length && (
+                        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-600">Unable to load traces for this session.</div>
+                    )}
+                    {traceStatus === "ready" && !traceEntries.length && (
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">No function traces were captured for this session.</div>
+                    )}
+                    {traceStatus === "idle" && !traceEntries.length && (
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">Traces will appear once data is collected for this session.</div>
+                    )}
+                    {traceEntries.length > 0 && (
+                        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+                            {traceEntries.map((entry) => {
+                                const isActive = selectedTrace?.id === entry.id;
+                                const meta = entry.request || {};
+                                const label = entry.label || meta.method || entry.id;
+                                return (
+                                    <div key={entry.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                                        <button
+                                            type="button"
+                                            onClick={() => setSelectedTraceId(entry.id)}
+                                            className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-offset-2 focus:ring-offset-white"
+                                        >
+                                            <div>
+                                                <div className="text-sm font-semibold text-slate-900">{label}</div>
+                                                <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.25em] text-slate-500">
+                                                    <span>Status {meta.status ?? "—"}</span>
+                                                    <span>{meta.durMs != null ? `${meta.durMs}ms` : "—"}</span>
+                                                    <span>{entry.total} events</span>
+                                                </div>
+                                            </div>
+                                            <span className="text-slate-400">{isActive ? "▾" : "▸"}</span>
+                                        </button>
+                                        {isActive && (
+                                            <div className="border-t border-slate-200 bg-slate-50 px-2 py-4 sm:px-4">
+                                                <FunctionTraceViewer trace={selectedTrace?.events || []} title={traceTitle} className="is-embedded" />
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </aside>
+    );
 
-                            {!renderGroups.length && !showAll && (
-                                <div className="rounded-XL border border-slate-800/50 bg-slate-900/60 px-4 py-3 text-xs text-slate-300">
-                                    No events near the current time. Try{" "}
-                                    <button className="text-sky-400 underline" onClick={() => setShowAll(true)}>
-                                        showing all
-                                    </button>
-                                    .
-                                </div>
-                            )}
+    return (
+        <div className="min-h-screen bg-slate-100 text-slate-900">
+            <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-6 py-8 lg:px-10">
+                <header className="flex flex-col gap-4 border-b border-slate-200 pb-6">
+                    <div className="flex items-center gap-4">
+                        <LogoMark className="h-11 w-11" />
+                        <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.4em] text-slate-500">Replay console</p>
+                            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Session debugger</h1>
                         </div>
                     </div>
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                        <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 font-medium uppercase tracking-[0.3em] text-slate-600">
+                            Session
+                            <span className="font-mono text-slate-900">{sessionId}</span>
+                        </span>
+                        <span className="text-slate-500">
+                            Inspect the rrweb playback alongside backend events and captured traces.
+                        </span>
+                    </div>
+                </header>
 
-                    <div className={`flex-1 min-h-0 px-6 py-6 ${panelView !== "trace" ? "hidden" : ""}`}>
-                        <div className="flex h-full min-h-0 flex-col gap-4">
-                            {traceStatus === "loading" && !traceEntries.length && (
-                                <div className="flex flex-1 items-center justify-center rounded-2xl border border-slate-800/60 bg-slate-900/65">
-                                    <div className="animate-pulse text-xs text-slate-300">Fetching trace data…</div>
-                                </div>
-                            )}
-                            {traceStatus === "error" && !traceEntries.length && (
-                                <div className="rounded-2xl border border-rose-500/40 bg-rose-500/15 px-4 py-3 text-xs text-rose-100">
-                                    Unable to load traces for this session.
-                                </div>
-                            )}
-                            {traceStatus === "ready" && !traceEntries.length && (
-                                <div className="rounded-2xl border border-slate-800/60 bg-slate-900/60 px-4 py-3 text-xs text-slate-300">
-                                    No function traces were captured for this session.
-                                </div>
-                            )}
-                            {traceStatus === "idle" && !traceEntries.length && (
-                                <div className="rounded-2xl border border-slate-800/60 bg-slate-900/60 px-4 py-3 text-xs text-slate-300">
-                                    Traces will appear once data is collected for this session.
-                                </div>
-                            )}
-                            {traceEntries.length > 0 && (
-                                <div className="flex min-h-0 flex-col gap-4">
-                                    <div className="max-h-52 overflow-y-auto pr-1">
-                                        <div className="space-y-3">
-                                            {traceEntries.map((entry) => {
-                                                const isActive = selectedTrace?.id === entry.id;
-                                                const meta = entry.request || {};
-                                                return (
-                                                    <button
-                                                        key={entry.id}
-                                                        type="button"
-                                                        onClick={() => setSelectedTraceId(entry.id)}
-                                                        className={`w-full rounded-xl border px-4 py-3 text-left text-xs transition focus:outline-none focus:ring-2 focus:ring-sky-500 ${
-                                                            isActive
-                                                                ? "border-sky-500/60 bg-sky-500/10 text-slate-100"
-                                                                : "border-slate-700/60 bg-slate-900/45 text-slate-200 hover:border-slate-600 hover:bg-slate-900/65"
-                                                        }`}
-                                                    >
-                                                        <div className="font-mono text-[11px] text-slate-300">{entry.label}</div>
-                                                        <div className="mt-2 flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-slate-300">
-                                                            <span>Status {meta.status ?? "—"}</span>
-                                                            <span>{meta.durMs != null ? `${meta.durMs}ms` : "—"}</span>
-                                                        </div>
-                                                        <div className="mt-1 text-[10px] uppercase tracking-[0.3em] text-slate-300">
-                                                            {entry.total} events
-                                                        </div>
-                                                    </button>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                    <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-800/60 bg-slate-900/75 p-4">
-                                        <FunctionTraceViewer trace={selectedTrace?.events || []} title={traceTitle} className="is-embedded" />
-                                    </div>
-                                </div>
-                            )}
+                <div className="grid flex-1 min-h-0 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+                    <div className="flex min-h-0 flex-col gap-6">
+                        {playbackSection}
+                    </div>
+
+                    <div className="flex min-h-0 flex-col gap-4">
+                        <div className="flex items-center justify-between gap-3 rounded-3xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                            <nav className="flex flex-wrap items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setPanelView("timeline")}
+                                    className={`inline-flex items-center rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] transition focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-offset-2 focus:ring-offset-white ${
+                                        panelView === "timeline"
+                                            ? "bg-slate-900 text-white shadow-sm"
+                                            : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                                    }`}
+                                >
+                                    Timeline
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setPanelView("trace")}
+                                    className={`inline-flex items-center rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] transition focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-offset-2 focus:ring-offset-white ${
+                                        panelView === "trace"
+                                            ? "bg-slate-900 text-white shadow-sm"
+                                            : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                                    }`}
+                                >
+                                    Function trace
+                                </button>
+                            </nav>
+                            <span className="text-[11px] uppercase tracking-[0.25em] text-slate-400">
+                                {panelView === "timeline" ? timelineSummaryText : traceSummaryText}
+                            </span>
+                        </div>
+
+                        <div className="flex min-h-0 flex-1">
+                            {panelView === "timeline" ? timelinePanel : tracePanel}
                         </div>
                     </div>
-                </aside>
+                </div>
             </div>
         </div>
-    </div>
-</div>
     );
 }
