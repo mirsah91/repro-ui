@@ -9,7 +9,7 @@
 
   color-scheme: dark;
   color: rgb(226, 232, 240);
-  background-color: #020617;
+  background-color: #0f1b2f;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -19,6 +19,30 @@
 
 body {
   margin: 0;
-  background-color: #020617;
+  background-color: #0f1b2f;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.6) rgba(15, 23, 42, 0.55);
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.45);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.7);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.9);
 }
 

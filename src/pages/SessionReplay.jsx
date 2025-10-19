@@ -31,15 +31,24 @@ function LogoMark({ className = "", ...props }) {
         >
             <defs>
                 <linearGradient id="replay-logo-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stopColor="#38bdf8" />
-                    <stop offset="100%" stopColor="#a855f7" />
+                    <stop offset="0%" stopColor="#60a5fa" />
+                    <stop offset="55%" stopColor="#7dd3fc" />
+                    <stop offset="100%" stopColor="#c084fc" />
+                </linearGradient>
+                <linearGradient id="replay-logo-accent" x1="20%" y1="20%" x2="85%" y2="90%">
+                    <stop offset="0%" stopColor="#0f172a" stopOpacity="0.95" />
+                    <stop offset="100%" stopColor="#1e293b" stopOpacity="0.88" />
                 </linearGradient>
             </defs>
             <rect x="2" y="2" width="44" height="44" rx="14" fill="url(#replay-logo-gradient)" />
             <path
-                d="M16 12h10.2c6.1 0 10.8 3.7 10.8 9.8 0 4-1.8 6.8-5.1 8.6l5.3 9.6h-7.3l-4.2-8.2h-4.7v8.2H16V12zm6 6v6.3h4.2c2.2 0 3.5-1.2 3.5-3.2 0-2-1.3-3.1-3.5-3.1H22z"
-                fill="#0f172a"
-                fillOpacity="0.92"
+                d="M17 13.5c0-.83.67-1.5 1.5-1.5h8.4c5.65 0 9.6 3.27 9.6 8.45 0 3.87-1.92 6.54-5.25 7.65l4.98 8.98c.52.93-.16 2.07-1.2 2.07H29.6c-.57 0-1.08-.31-1.34-.8l-4.06-7.7h-2.2v7c0 .83-.67 1.5-1.5 1.5H18.5c-.83 0-1.5-.67-1.5-1.5V13.5Zm5.5 3.9v5.7h3.75c1.68 0 2.75-.92 2.75-2.7 0-1.77-1.07-3-2.75-3h-3.75Z"
+                fill="url(#replay-logo-accent)"
+            />
+            <path
+                d="M27.8 27.8h2.34a1.5 1.5 0 0 1 1.31.78l3.92 7.3H29.9a1.5 1.5 0 0 1-1.32-.79l-2.58-4.9c-.45-.87.18-1.94 1.16-1.94Z"
+                fill="#1d4ed8"
+                fillOpacity="0.55"
             />
         </svg>
     );
@@ -687,49 +696,59 @@ export default function SessionReplay({ sessionId }) {
     }
 
     return (
-        <div className="min-h-screen bg-slate-950 text-slate-100">
+        <div className="min-h-screen bg-slate-900 text-slate-100">
             <div className="relative flex min-h-screen flex-col overflow-hidden">
                 <div className="pointer-events-none absolute inset-0">
-                    <div className="absolute -left-32 top-0 h-80 w-80 rounded-full bg-sky-500/20 blur-3xl" />
-                    <div className="absolute bottom-[-18%] right-[-12%] h-96 w-96 rounded-full bg-fuchsia-500/12 blur-[150px]" />
+                    <div className="absolute -left-28 top-[-8%] h-80 w-80 rounded-full bg-sky-400/30 blur-3xl" />
+                    <div className="absolute bottom-[-18%] right-[-12%] h-96 w-96 rounded-full bg-fuchsia-400/20 blur-[150px]" />
                 </div>
                 <header className="relative z-10 flex flex-wrap items-center justify-between gap-6 px-8 py-6 sm:px-12">
                     <div className="flex items-center gap-4">
                         <LogoMark className="h-12 w-12 drop-shadow-xl" />
                         <div>
-                            <p className="text-xs uppercase tracking-[0.4em] text-slate-500">Replay console</p>
-                            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Session {sessionId ?? "—"}</h1>
+                            <p className="text-xs uppercase tracking-[0.4em] text-slate-300">Replay console</p>
+                            <h1 className="text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl">Session {sessionId ?? "—"}</h1>
                         </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-4 text-xs uppercase tracking-[0.25em] text-slate-400">
-                        <div className="inline-flex rounded-full border border-slate-800/70 bg-slate-900/60 p-1 shadow-lg backdrop-blur">
+                    <div className="flex flex-wrap items-center gap-4 text-xs uppercase tracking-[0.25em] text-slate-300">
+                        <div className="inline-flex rounded-full border border-slate-600/60 bg-slate-800/60 p-1 shadow-lg backdrop-blur">
                             <button
                                 type="button"
                                 onClick={() => setPanelView("timeline")}
-                                className={`rounded-full px-4 py-2 font-semibold transition ${panelView === "timeline" ? "bg-slate-800/60 text-slate-100" : "text-slate-400 hover:text-slate-200"}`}
+                                className={`rounded-full px-4 py-2 font-semibold transition ${panelView === "timeline" ? "bg-slate-700/60 text-slate-100" : "text-slate-300 hover:text-slate-100"}`}
                             >
                                 Timeline
                             </button>
                             <button
                                 type="button"
                                 onClick={() => setPanelView("trace")}
-                                className={`rounded-full px-4 py-2 font-semibold transition ${panelView === "trace" ? "bg-slate-800/60 text-slate-100" : "text-slate-400 hover:text-slate-200"}`}
+                                className={`rounded-full px-4 py-2 font-semibold transition ${panelView === "trace" ? "bg-slate-700/60 text-slate-100" : "text-slate-300 hover:text-slate-100"}`}
                             >
                                 Function trace
                             </button>
                         </div>
-                        <span className="text-[11px] uppercase tracking-[0.3em] text-slate-500">{traceSummaryText}</span>
+                        <span className="text-[11px] uppercase tracking-[0.3em] text-slate-300">{traceSummaryText}</span>
                     </div>
                 </header>
                 <div className="relative z-10 flex flex-1 flex-col">
-                    <div className="grid flex-1 grid-cols-[minmax(0,1.65fr)_minmax(0,1.05fr)] overflow-hidden">
-                <section className="flex min-h-0 flex-col border-r border-slate-900/60 bg-slate-950/80 backdrop-blur">
-                    <div className="flex items-center justify-between border-b border-slate-900/60 px-6 py-4">
-                        <div>
-                            <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Playback</p>
-                            <h2 className="text-lg font-semibold tracking-tight">User session replay</h2>
-                        </div>
-                        <div className="flex items-center gap-3 text-xs text-slate-400">
+                    <div
+                        className={`grid min-h-0 flex-1 overflow-hidden ${
+                            panelView === "trace"
+                                ? "grid-cols-1"
+                                : "grid-cols-[minmax(0,1.65fr)_minmax(0,1.05fr)]"
+                        }`}
+                    >
+                        <section
+                            className={`flex min-h-0 flex-col border-r border-slate-800/60 bg-slate-900/80 backdrop-blur ${
+                                panelView === "trace" ? "hidden" : ""
+                            }`}
+                        >
+                            <div className="flex items-center justify-between border-b border-slate-800/50 px-6 py-4">
+                                <div>
+                                    <p className="text-xs uppercase tracking-[0.3em] text-slate-300">Playback</p>
+                                    <h2 className="text-lg font-semibold tracking-tight text-slate-100">User session replay</h2>
+                                </div>
+                                <div className="flex items-center gap-3 text-xs text-slate-300">
               <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 font-medium ${
                   playerStatus === "playing" ? "bg-emerald-500/10 text-emerald-300" :
                       playerStatus === "paused" ? "bg-amber-500/10 text-amber-300" :
@@ -746,7 +765,7 @@ export default function SessionReplay({ sessionId }) {
                     <div className="relative flex-1 min-h-0 px-6 pb-6 pt-4">
                         <div
                             ref={containerRef}
-                            className="h-full w-full overflow-hidden rounded-2xl border border-slate-900/40 bg-slate-900/80 shadow-2xl"
+                            className="h-full w-full overflow-hidden rounded-2xl border border-slate-800/40 bg-slate-900/75 shadow-2xl"
                         />
                         {playerStatus === "loading" && (
                             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -771,7 +790,7 @@ export default function SessionReplay({ sessionId }) {
                         )}
                     </div>
 
-                    <div className="border-t border-slate-900/60 bg-slate-950/90 px-6 py-5">
+                    <div className="border-t border-slate-800/60 bg-slate-900/85 px-6 py-5">
                         <div className="mb-4 flex items-center gap-3 text-sm">
                             <button
                                 type="button"
@@ -793,7 +812,7 @@ export default function SessionReplay({ sessionId }) {
                                 }}
                                 className="inline-flex items-center gap-2 rounded-full border border-slate-800/60 bg-slate-900 px-4 py-2 font-medium text-slate-100 transition hover:border-slate-700 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
                             >
-                <span className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                <span className="text-xs uppercase tracking-[0.2em] text-slate-300">
                   {playerStatus === "playing" ? "Pause" : "Play"}
                 </span>
                             </button>
@@ -808,18 +827,18 @@ export default function SessionReplay({ sessionId }) {
                                     setPlayerStatus("playing");
                                     setCurrentTime(0);
                                 }}
-                                className="inline-flex items-center gap-2 rounded-full border border-slate-800/60 bg-slate-900 px-4 py-2 text-xs uppercase tracking-[0.2em] text-slate-400 transition hover:border-slate-700 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                                className="inline-flex items-center gap-2 rounded-full border border-slate-700/60 bg-slate-900 px-4 py-2 text-xs uppercase tracking-[0.2em] text-slate-300 transition hover:border-slate-600 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
                             >
                                 Restart
                             </button>
                             <button
                                 type="button"
                                 onClick={() => applyFitContain("manual-fit")}
-                                className="ml-2 inline-flex items-center gap-2 rounded-full border border-slate-800/60 bg-slate-900 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-400"
+                                className="ml-2 inline-flex items-center gap-2 rounded-full border border-slate-700/60 bg-slate-900 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300"
                             >
                                 Refit Now (log)
                             </button>
-                            <div className="ml-auto text-xs text-slate-400">
+                            <div className="ml-auto text-xs text-slate-300">
                                 {playerStatus === "paused" ? "paused" : "live"}
                             </div>
                         </div>
@@ -898,10 +917,10 @@ export default function SessionReplay({ sessionId }) {
                                 const sub = getMarkerMeta(event);
                                 return (
                                     <div
-                                        className="pointer-events-none absolute z-50 -translate-x-1/2 rounded-xl border border-slate-900/60 bg-slate-950/95 px-3 py-2 text-xs text-slate-200 shadow-2xl backdrop-blur"
+                                        className="pointer-events-none absolute z-50 -translate-x-1/2 rounded-xl border border-slate-800/60 bg-slate-900/95 px-3 py-2 text-xs text-slate-100 shadow-2xl backdrop-blur"
                                         style={{ left: `${x}%`, bottom: "calc(50% + 24px)" }}
                                     >
-                                        <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.25em] text-slate-500">
+                                        <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.25em] text-slate-300">
                                             <span className={`h-2 w-2 rounded-full ${KIND_COLORS[event.kind] || "bg-slate-500"}`} />
                                             {event.kind}
                                         </div>
@@ -909,11 +928,11 @@ export default function SessionReplay({ sessionId }) {
                                             {getMarkerTitle(event)}
                                         </div>
                                         {sub && (
-                                            <div className="mt-1 text-[11px] uppercase tracking-[0.3em] text-slate-500">
+                                            <div className="mt-1 text-[11px] uppercase tracking-[0.3em] text-slate-300">
                                                 {sub}
                                             </div>
                                         )}
-                                        <div className="mt-1 text-[11px] text-slate-500">
+                                        <div className="mt-1 text-[11px] text-slate-300">
                                             {formatMaybeTime(alignedSeekMsFor(event))} rrweb • @{event._t ?? "—"}
                                         </div>
                                     </div>
@@ -923,33 +942,37 @@ export default function SessionReplay({ sessionId }) {
                     </div>
                 </section>
 
-                <aside className="flex h-full min-h-0 flex-col overflow-hidden bg-slate-950/85 backdrop-blur">
-                    <div className="border-b border-slate-900/60 px-6 py-4">
+                <aside
+                    className={`flex h-full min-h-0 flex-col overflow-hidden backdrop-blur ${
+                        panelView === "trace" ? "bg-slate-900/80" : "bg-slate-900/70"
+                    }`}
+                >
+                    <div className="border-b border-slate-800/50 px-6 py-4">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                             <div>
-                                <p className="text-xs uppercase tracking-[0.3em] text-slate-500">{panelView === "timeline" ? "Timeline" : "Function trace"}</p>
-                                <h2 className="text-sm font-semibold text-slate-200">
+                                <p className="text-xs uppercase tracking-[0.3em] text-slate-300">{panelView === "timeline" ? "Timeline" : "Function trace"}</p>
+                                <h2 className="text-sm font-semibold text-slate-100">
                                     {panelView === "timeline"
                                         ? showAll ? "All backend events" : "Contextual backend events"
                                         : traceTitle}
                                 </h2>
                             </div>
                             {panelView === "timeline" ? (
-                                <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                                <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-300">
                                     <input
                                         type="checkbox"
                                         checked={showAll}
                                         onChange={(e) => setShowAll(e.target.checked)}
-                                        className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-sky-400 focus:ring-sky-500"
+                                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-sky-400 focus:ring-sky-400"
                                     />
                                     Show all
                                 </label>
                             ) : (
-                                <span className="text-[11px] uppercase tracking-[0.25em] text-slate-500">{traceSummaryText}</span>
+                                <span className="text-[11px] uppercase tracking-[0.25em] text-slate-300">{traceSummaryText}</span>
                             )}
                         </div>
                         {panelView === "trace" && (
-                            <p className="mt-2 text-xs text-slate-500">
+                            <p className="mt-2 text-xs text-slate-300">
                                 Select a request to explore its captured function trace.
                             </p>
                         )}
@@ -957,7 +980,7 @@ export default function SessionReplay({ sessionId }) {
 
                     <div className={`flex-1 overflow-y-auto px-6 py-6 min-h-0 ${panelView !== "timeline" ? "hidden" : ""}`}>
                         {!renderGroups.length && (
-                            <div className="text-xs text-slate-500">
+                            <div className="text-xs text-slate-300">
                                 No backend timeline data for this session.
                             </div>
                         )}
@@ -973,16 +996,16 @@ export default function SessionReplay({ sessionId }) {
                                 return (
                                     <div
                                         key={g.id || gi}
-                                        className="rounded-2xl border border-slate-900/60 bg-slate-900/70 shadow-lg backdrop-blur"
+                                        className="rounded-2xl border border-slate-800/50 bg-slate-900/65 shadow-lg backdrop-blur"
                                     >
-                                        <div className="flex items-center justify-between border-b border-slate-900/60 px-4 py-3">
+                                        <div className="flex items-center justify-between border-b border-slate-800/50 px-4 py-3">
                                             <div>
                                                 <div className="text-sm font-semibold text-slate-100">{title}</div>
                                                 {windowLabel && (
-                                                    <div className="text-xs text-slate-500">{windowLabel}</div>
+                                                    <div className="text-xs text-slate-300">{windowLabel}</div>
                                                 )}
                                             </div>
-                                            <div className="text-[11px] uppercase tracking-[0.25em] text-slate-500">
+                                            <div className="text-[11px] uppercase tracking-[0.25em] text-slate-300">
                                                 {g.items.length} events
                                             </div>
                                         </div>
@@ -1002,14 +1025,14 @@ export default function SessionReplay({ sessionId }) {
                                                         className={`group relative overflow-hidden rounded-xl border px-3 py-3 text-sm transition focus:outline-none focus:ring-2 focus:ring-sky-500 ${
                                                             isActive
                                                                 ? "border-sky-500/60 bg-sky-500/10"
-                                                                : "border-slate-800/60 bg-slate-950/40 hover:border-slate-700 hover:bg-slate-900/60"
+                                                                : "border-slate-700/50 bg-slate-900/45 hover:border-slate-600 hover:bg-slate-900/65"
                                                         }`}
                                                     >
-                                                        <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-slate-500">
-                              <span className="flex items-center gap-2">
-                                <span className={`h-2 w-2 rounded-full ${KIND_COLORS[e.kind] || "bg-slate-500"}`} />
-                                  {e.kind}
-                              </span>
+                                                        <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-slate-300">
+                                                            <span className="flex items-center gap-2">
+                                                                <span className={`h-2 w-2 rounded-full ${KIND_COLORS[e.kind] || "bg-slate-500"}`} />
+                                                                {e.kind}
+                                                            </span>
                                                             <span>
                                 @{e._t ?? "—"} • {typeof aligned === "number" ? `${Math.round(aligned)}ms` : "—"}
                               </span>
@@ -1017,43 +1040,43 @@ export default function SessionReplay({ sessionId }) {
 
                                                         {e.kind === "request" && (
                                                             <div className="space-y-1">
-                                                                <div className="font-mono text-xs text-slate-200">
+                                                                <div className="font-mono text-xs text-slate-100">
                                                                     {e.meta?.method} {e.meta?.url}
                                                                 </div>
-                                                                <div className="text-xs text-slate-400">
+                                                                <div className="text-xs text-slate-300">
                                                                     status {e.meta?.status} • {e.meta?.durMs}ms
                                                                 </div>
                                                             </div>
                                                         )}
                                                         {e.kind === "db" && (
                                                             <div className="space-y-2 text-xs text-slate-300">
-                                                                <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-slate-400">
+                                                                <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-slate-300">
                                                                     {e.meta?.collection} • {e.meta?.op}
                                                                 </div>
                                                                 {e.meta?.query && (
-                                                                    <pre className="max-h-36 overflow-auto rounded-lg bg-slate-950/70 p-3 text-[11px] leading-relaxed text-slate-300">
-                                    {JSON.stringify(e.meta.query, null, 2)}
-                                  </pre>
+                                                                    <pre className="max-h-36 overflow-auto rounded-lg bg-slate-900/70 p-3 text-[11px] leading-relaxed text-slate-200">
+                                                                        {JSON.stringify(e.meta.query, null, 2)}
+                                                                    </pre>
                                                                 )}
                                                                 {e.meta?.resultMeta && (
-                                                                    <div className="text-[11px] text-slate-400">
+                                                                    <div className="text-[11px] text-slate-300">
                                                                         result {JSON.stringify(e.meta.resultMeta)}
                                                                     </div>
                                                                 )}
                                                             </div>
                                                         )}
                                                         {e.kind === "action" && (
-                                                            <div className="space-y-1 text-xs text-slate-200">
+                                                            <div className="space-y-1 text-xs text-slate-100">
                                                                 <div className="font-mono text-sm">{e.label || e.actionId}</div>
                                                                 {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
-                                                                    <div className="text-[11px] text-slate-400">
+                                                                    <div className="text-[11px] text-slate-300">
                                                                         [{e.tStart ?? "—"} … {e.tEnd ?? "—"}]
                                                                     </div>
                                                                 )}
                                                             </div>
                                                         )}
                                                         {e.kind === "email" && (
-                                                            <div className="text-xs text-slate-200">
+                                                            <div className="text-xs text-slate-100">
                                                                 <EmailItem meta={e.meta} />
                                                             </div>
                                                         )}
@@ -1066,7 +1089,7 @@ export default function SessionReplay({ sessionId }) {
                             })}
 
                             {!renderGroups.length && !showAll && (
-                                <div className="rounded-XL border border-slate-900/60 bg-slate-900/70 px-4 py-3 text-xs text-slate-400">
+                                <div className="rounded-XL border border-slate-800/50 bg-slate-900/60 px-4 py-3 text-xs text-slate-300">
                                     No events near the current time. Try{" "}
                                     <button className="text-sky-400 underline" onClick={() => setShowAll(true)}>
                                         showing all
@@ -1080,22 +1103,22 @@ export default function SessionReplay({ sessionId }) {
                     <div className={`flex-1 min-h-0 px-6 py-6 ${panelView !== "trace" ? "hidden" : ""}`}>
                         <div className="flex h-full min-h-0 flex-col gap-4">
                             {traceStatus === "loading" && !traceEntries.length && (
-                                <div className="flex flex-1 items-center justify-center rounded-2xl border border-slate-900/60 bg-slate-900/70">
-                                    <div className="animate-pulse text-xs text-slate-400">Fetching trace data…</div>
+                                <div className="flex flex-1 items-center justify-center rounded-2xl border border-slate-800/60 bg-slate-900/65">
+                                    <div className="animate-pulse text-xs text-slate-300">Fetching trace data…</div>
                                 </div>
                             )}
                             {traceStatus === "error" && !traceEntries.length && (
-                                <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-xs text-rose-200">
+                                <div className="rounded-2xl border border-rose-500/40 bg-rose-500/15 px-4 py-3 text-xs text-rose-100">
                                     Unable to load traces for this session.
                                 </div>
                             )}
                             {traceStatus === "ready" && !traceEntries.length && (
-                                <div className="rounded-2xl border border-slate-900/60 bg-slate-900/70 px-4 py-3 text-xs text-slate-400">
+                                <div className="rounded-2xl border border-slate-800/60 bg-slate-900/60 px-4 py-3 text-xs text-slate-300">
                                     No function traces were captured for this session.
                                 </div>
                             )}
                             {traceStatus === "idle" && !traceEntries.length && (
-                                <div className="rounded-2xl border border-slate-900/60 bg-slate-900/70 px-4 py-3 text-xs text-slate-400">
+                                <div className="rounded-2xl border border-slate-800/60 bg-slate-900/60 px-4 py-3 text-xs text-slate-300">
                                     Traces will appear once data is collected for this session.
                                 </div>
                             )}
@@ -1114,15 +1137,15 @@ export default function SessionReplay({ sessionId }) {
                                                         className={`w-full rounded-xl border px-4 py-3 text-left text-xs transition focus:outline-none focus:ring-2 focus:ring-sky-500 ${
                                                             isActive
                                                                 ? "border-sky-500/60 bg-sky-500/10 text-slate-100"
-                                                                : "border-slate-800/60 bg-slate-950/40 text-slate-300 hover:border-slate-700 hover:bg-slate-900/60"
+                                                                : "border-slate-700/60 bg-slate-900/45 text-slate-200 hover:border-slate-600 hover:bg-slate-900/65"
                                                         }`}
                                                     >
-                                                        <div className="font-mono text-[11px] text-slate-400">{entry.label}</div>
-                                                        <div className="mt-2 flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-slate-500">
+                                                        <div className="font-mono text-[11px] text-slate-300">{entry.label}</div>
+                                                        <div className="mt-2 flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-slate-300">
                                                             <span>Status {meta.status ?? "—"}</span>
                                                             <span>{meta.durMs != null ? `${meta.durMs}ms` : "—"}</span>
                                                         </div>
-                                                        <div className="mt-1 text-[10px] uppercase tracking-[0.3em] text-slate-500">
+                                                        <div className="mt-1 text-[10px] uppercase tracking-[0.3em] text-slate-300">
                                                             {entry.total} events
                                                         </div>
                                                     </button>
@@ -1130,7 +1153,7 @@ export default function SessionReplay({ sessionId }) {
                                             })}
                                         </div>
                                     </div>
-                                    <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-900/70 bg-slate-950/80 p-4">
+                                    <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-800/60 bg-slate-900/75 p-4">
                                         <FunctionTraceViewer trace={selectedTrace?.events || []} title={traceTitle} className="is-embedded" />
                                     </div>
                                 </div>
