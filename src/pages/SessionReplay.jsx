@@ -4,7 +4,9 @@ import "rrweb/dist/rrweb.min.css";
 import useTimeline from "../hooks/useTimeline";
 import { decodeBase64JsonArray } from "../lib/rrwebDecode";
 import EmailItem from "../components/EmailItem.jsx";
-import '../components/SessionReply.css'
+import { FunctionTraceViewer } from "../components/FunctionTracerViewer.jsx";
+import useSessionTraces from "../hooks/useSessionTraces.js";
+import "../components/SessionReply.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 const WINDOW_MS = 1500;
@@ -17,6 +19,31 @@ const warn = (...a) => DEBUG && console.warn("[repro:replay]", ...a);
 
 // rank order inside one action group
 const KIND_RANK = { action: 0, request: 1, db: 2, email: 3 };
+
+function LogoMark({ className = "", ...props }) {
+    return (
+        <svg
+            viewBox="0 0 48 48"
+            role="img"
+            aria-label="Replay logo"
+            className={className}
+            {...props}
+        >
+            <defs>
+                <linearGradient id="replay-logo-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#38bdf8" />
+                    <stop offset="100%" stopColor="#a855f7" />
+                </linearGradient>
+            </defs>
+            <rect x="2" y="2" width="44" height="44" rx="14" fill="url(#replay-logo-gradient)" />
+            <path
+                d="M16 12h10.2c6.1 0 10.8 3.7 10.8 9.8 0 4-1.8 6.8-5.1 8.6l5.3 9.6h-7.3l-4.2-8.2h-4.7v8.2H16V12zm6 6v6.3h4.2c2.2 0 3.5-1.2 3.5-3.2 0-2-1.3-3.1-3.5-3.1H22z"
+                fill="#0f172a"
+                fillOpacity="0.92"
+            />
+        </svg>
+    );
+}
 
 function itemServerTime(it) {
     if (typeof it.t === "number") return it.t;
@@ -134,6 +161,7 @@ export default function SessionReplay({ sessionId }) {
 
     const { status, queueRef, pullMore, doneRef } = useRrwebStream(sessionId);
     const rawTicks = useTimeline(sessionId);
+    const { status: traceStatus, entries: traceEntries } = useSessionTraces(sessionId);
 
     const [currentTime, setCurrentTime] = useState(0);
     const [playerStatus, setPlayerStatus] = useState("idle");
@@ -141,9 +169,50 @@ export default function SessionReplay({ sessionId }) {
     const [playerMeta, setPlayerMeta] = useState({ totalTime: 0 });
     const [hoveredMarker, setHoveredMarker] = useState(null);
     const [activeEventId, setActiveEventId] = useState(null);
+    const [panelView, setPanelView] = useState("timeline");
+    const [selectedTraceId, setSelectedTraceId] = useState(null);
 
     const rrwebFirstTsRef = useRef(null);
     const clockOffsetRef = useRef(0);
+
+    useEffect(() => {
+        setPanelView("timeline");
+        setSelectedTraceId(null);
+    }, [sessionId]);
+
+    useEffect(() => {
+        if (!traceEntries.length) {
+            setSelectedTraceId(null);
+            return;
+        }
+        if (!selectedTraceId) {
+            setSelectedTraceId(traceEntries[0].id);
+        }
+    }, [traceEntries, selectedTraceId]);
+
+    const selectedTrace = useMemo(() => {
+        if (!traceEntries.length) return null;
+        if (selectedTraceId) {
+            const found = traceEntries.find((entry) => entry.id === selectedTraceId);
+            if (found) return found;
+        }
+        return traceEntries[0];
+    }, [traceEntries, selectedTraceId]);
+
+    const traceTitle = selectedTrace
+        ? `${selectedTrace.label || "Function trace"} (${selectedTrace.total || selectedTrace.events.length || 0} events)`
+        : "Function trace";
+
+    const traceSummaryText = useMemo(() => {
+        if (traceStatus === "loading") return "Loading traces…";
+        if (traceStatus === "error") return "Failed to load traces";
+        if (traceEntries.length) {
+            const count = traceEntries.length;
+            return `${count} trace${count === 1 ? "" : "s"}`;
+        }
+        if (traceStatus === "ready") return "No traces captured";
+        return "Trace inspector";
+    }, [traceEntries.length, traceStatus]);
 
     // ---- sizing helpers (content-box) ----
     const measureContainerSize = React.useCallback(() => {
@@ -618,13 +687,47 @@ export default function SessionReplay({ sessionId }) {
     }
 
     return (
-        <div className="h-screen w-full overflow-hidden bg-slate-950 text-slate-100">
-            <div className="grid h-full w-full grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+        <div className="min-h-screen bg-slate-950 text-slate-100">
+            <div className="relative flex min-h-screen flex-col overflow-hidden">
+                <div className="pointer-events-none absolute inset-0">
+                    <div className="absolute -left-32 top-0 h-80 w-80 rounded-full bg-sky-500/20 blur-3xl" />
+                    <div className="absolute bottom-[-18%] right-[-12%] h-96 w-96 rounded-full bg-fuchsia-500/12 blur-[150px]" />
+                </div>
+                <header className="relative z-10 flex flex-wrap items-center justify-between gap-6 px-8 py-6 sm:px-12">
+                    <div className="flex items-center gap-4">
+                        <LogoMark className="h-12 w-12 drop-shadow-xl" />
+                        <div>
+                            <p className="text-xs uppercase tracking-[0.4em] text-slate-500">Replay console</p>
+                            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Session {sessionId ?? "—"}</h1>
+                        </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-4 text-xs uppercase tracking-[0.25em] text-slate-400">
+                        <div className="inline-flex rounded-full border border-slate-800/70 bg-slate-900/60 p-1 shadow-lg backdrop-blur">
+                            <button
+                                type="button"
+                                onClick={() => setPanelView("timeline")}
+                                className={`rounded-full px-4 py-2 font-semibold transition ${panelView === "timeline" ? "bg-slate-800/60 text-slate-100" : "text-slate-400 hover:text-slate-200"}`}
+                            >
+                                Timeline
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setPanelView("trace")}
+                                className={`rounded-full px-4 py-2 font-semibold transition ${panelView === "trace" ? "bg-slate-800/60 text-slate-100" : "text-slate-400 hover:text-slate-200"}`}
+                            >
+                                Function trace
+                            </button>
+                        </div>
+                        <span className="text-[11px] uppercase tracking-[0.3em] text-slate-500">{traceSummaryText}</span>
+                    </div>
+                </header>
+                <div className="relative z-10 flex flex-1 flex-col">
+                    <div className="grid flex-1 grid-cols-[minmax(0,1.65fr)_minmax(0,1.05fr)] overflow-hidden">
                 <section className="flex min-h-0 flex-col border-r border-slate-900/60 bg-slate-950/80 backdrop-blur">
                     <div className="flex items-center justify-between border-b border-slate-900/60 px-6 py-4">
                         <div>
-                            <h1 className="text-lg font-semibold tracking-tight">Session replay</h1>
-                            <p className="text-xs text-slate-400">session {sessionId ?? "—"}</p>
+                            <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Playback</p>
+                            <h2 className="text-lg font-semibold tracking-tight">User session replay</h2>
                         </div>
                         <div className="flex items-center gap-3 text-xs text-slate-400">
               <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 font-medium ${
@@ -820,24 +923,39 @@ export default function SessionReplay({ sessionId }) {
                     </div>
                 </section>
 
-                <aside className="flex h-full min-h-0 flex-col overflow-hidden bg-slate-950/95">
-                    <div className="flex items-center justify-between border-b border-slate-900/60 px-6 py-4">
-                        <div>
-                            <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">Timeline</h2>
-                            <p className="text-xs text-slate-500">{showAll ? "All backend events" : "Contextual backend events"}</p>
+                <aside className="flex h-full min-h-0 flex-col overflow-hidden bg-slate-950/85 backdrop-blur">
+                    <div className="border-b border-slate-900/60 px-6 py-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <p className="text-xs uppercase tracking-[0.3em] text-slate-500">{panelView === "timeline" ? "Timeline" : "Function trace"}</p>
+                                <h2 className="text-sm font-semibold text-slate-200">
+                                    {panelView === "timeline"
+                                        ? showAll ? "All backend events" : "Contextual backend events"
+                                        : traceTitle}
+                                </h2>
+                            </div>
+                            {panelView === "timeline" ? (
+                                <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                                    <input
+                                        type="checkbox"
+                                        checked={showAll}
+                                        onChange={(e) => setShowAll(e.target.checked)}
+                                        className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-sky-400 focus:ring-sky-500"
+                                    />
+                                    Show all
+                                </label>
+                            ) : (
+                                <span className="text-[11px] uppercase tracking-[0.25em] text-slate-500">{traceSummaryText}</span>
+                            )}
                         </div>
-                        <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                            <input
-                                type="checkbox"
-                                checked={showAll}
-                                onChange={(e) => setShowAll(e.target.checked)}
-                                className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-sky-400 focus:ring-sky-500"
-                            />
-                            Show all
-                        </label>
+                        {panelView === "trace" && (
+                            <p className="mt-2 text-xs text-slate-500">
+                                Select a request to explore its captured function trace.
+                            </p>
+                        )}
                     </div>
 
-                    <div className="flex-1 overflow-y-auto px-6 py-6 min-h-0">
+                    <div className={`flex-1 overflow-y-auto px-6 py-6 min-h-0 ${panelView !== "timeline" ? "hidden" : ""}`}>
                         {!renderGroups.length && (
                             <div className="text-xs text-slate-500">
                                 No backend timeline data for this session.
@@ -958,8 +1076,71 @@ export default function SessionReplay({ sessionId }) {
                             )}
                         </div>
                     </div>
+
+                    <div className={`flex-1 min-h-0 px-6 py-6 ${panelView !== "trace" ? "hidden" : ""}`}>
+                        <div className="flex h-full min-h-0 flex-col gap-4">
+                            {traceStatus === "loading" && !traceEntries.length && (
+                                <div className="flex flex-1 items-center justify-center rounded-2xl border border-slate-900/60 bg-slate-900/70">
+                                    <div className="animate-pulse text-xs text-slate-400">Fetching trace data…</div>
+                                </div>
+                            )}
+                            {traceStatus === "error" && !traceEntries.length && (
+                                <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-xs text-rose-200">
+                                    Unable to load traces for this session.
+                                </div>
+                            )}
+                            {traceStatus === "ready" && !traceEntries.length && (
+                                <div className="rounded-2xl border border-slate-900/60 bg-slate-900/70 px-4 py-3 text-xs text-slate-400">
+                                    No function traces were captured for this session.
+                                </div>
+                            )}
+                            {traceStatus === "idle" && !traceEntries.length && (
+                                <div className="rounded-2xl border border-slate-900/60 bg-slate-900/70 px-4 py-3 text-xs text-slate-400">
+                                    Traces will appear once data is collected for this session.
+                                </div>
+                            )}
+                            {traceEntries.length > 0 && (
+                                <div className="flex min-h-0 flex-col gap-4">
+                                    <div className="max-h-52 overflow-y-auto pr-1">
+                                        <div className="space-y-3">
+                                            {traceEntries.map((entry) => {
+                                                const isActive = selectedTrace?.id === entry.id;
+                                                const meta = entry.request || {};
+                                                return (
+                                                    <button
+                                                        key={entry.id}
+                                                        type="button"
+                                                        onClick={() => setSelectedTraceId(entry.id)}
+                                                        className={`w-full rounded-xl border px-4 py-3 text-left text-xs transition focus:outline-none focus:ring-2 focus:ring-sky-500 ${
+                                                            isActive
+                                                                ? "border-sky-500/60 bg-sky-500/10 text-slate-100"
+                                                                : "border-slate-800/60 bg-slate-950/40 text-slate-300 hover:border-slate-700 hover:bg-slate-900/60"
+                                                        }`}
+                                                    >
+                                                        <div className="font-mono text-[11px] text-slate-400">{entry.label}</div>
+                                                        <div className="mt-2 flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-slate-500">
+                                                            <span>Status {meta.status ?? "—"}</span>
+                                                            <span>{meta.durMs != null ? `${meta.durMs}ms` : "—"}</span>
+                                                        </div>
+                                                        <div className="mt-1 text-[10px] uppercase tracking-[0.3em] text-slate-500">
+                                                            {entry.total} events
+                                                        </div>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                    <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-900/70 bg-slate-950/80 p-4">
+                                        <FunctionTraceViewer trace={selectedTrace?.events || []} title={traceTitle} className="is-embedded" />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 </aside>
             </div>
         </div>
+    </div>
+</div>
     );
 }

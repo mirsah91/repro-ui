@@ -26,6 +26,19 @@
   min-height: 70vh;
 }
 
+.trace-viewer.is-embedded {
+  min-height: 0;
+  height: 100%;
+}
+
+.trace-viewer.is-embedded .trace-content {
+  min-height: 0;
+}
+
+.trace-viewer.is-embedded .trace-tree-scroll {
+  max-height: none;
+}
+
 .trace-header {
   display: flex;
   flex-wrap: wrap;
