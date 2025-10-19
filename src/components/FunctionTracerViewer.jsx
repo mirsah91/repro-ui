@@ -1,6 +1,14 @@
 // FunctionTraceViewer.jsx
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import ReactFlow, { Background, Controls, MiniMap, Handle, Position, MarkerType } from "reactflow";
+import ReactFlow, {
+  Background,
+  Controls,
+  MiniMap,
+  Handle,
+  Position,
+  MarkerType,
+  applyNodeChanges
+} from "reactflow";
 import "reactflow/dist/style.css";
 import "./FunctionTraceViewer.css";
 
@@ -248,16 +256,11 @@ const LAYOUT = {
   subtreeGapCols: 1.25
 };
 
-const DEPTH_COLORS = [
-  { accent: "#2563eb", surface: "rgba(37, 99, 235, 0.12)" },
-  { accent: "#0ea5e9", surface: "rgba(14, 165, 233, 0.12)" },
-  { accent: "#10b981", surface: "rgba(16, 185, 129, 0.12)" },
-  { accent: "#f59e0b", surface: "rgba(245, 158, 11, 0.14)" },
-  { accent: "#ec4899", surface: "rgba(236, 72, 153, 0.12)" },
-  { accent: "#8b5cf6", surface: "rgba(139, 92, 246, 0.12)" }
-];
+const PRIMARY_ACCENT = "#2563eb";
+const PRIMARY_SURFACE = "rgba(37, 99, 235, 0.12)";
+const EVENT_SURFACE = "rgba(37, 99, 235, 0.18)";
 
-const depthStyle = (depth = 0) => DEPTH_COLORS[depth % DEPTH_COLORS.length];
+const depthStyle = () => ({ accent: PRIMARY_ACCENT, surface: PRIMARY_SURFACE });
 
 function buildGraphLayout(callRoots, { pack = true } = {}) {
   const allNodes = [];
@@ -302,7 +305,7 @@ function buildGraphLayout(callRoots, { pack = true } = {}) {
       centerX = (minCenter + maxCenter) / 2;
     }
 
-    const depthStyles = isEvent ? { accent: "#7c3aed", surface: "rgba(124, 58, 237, 0.16)" } : depthStyle(depth);
+    const depthStyles = isEvent ? { accent: PRIMARY_ACCENT, surface: EVENT_SURFACE } : depthStyle(depth);
 
     const nodeEntry = {
       id: node.id,
@@ -491,6 +494,8 @@ const btnStyle = (isLight) => ({
 function TraceGraphView({ graph }) {
   const wrapperRef = useRef(null);
   const [ready, setReady] = useState(false);
+  const [baseNodes, setBaseNodes] = useState(graph.nodes);
+  const [baseEdges, setBaseEdges] = useState(graph.edges);
   const [localNodes, setLocalNodes] = useState(graph.nodes);
   const [localEdges, setLocalEdges] = useState(graph.edges);
   const [components, setComponents] = useState(graph.components || []);
@@ -504,16 +509,24 @@ function TraceGraphView({ graph }) {
   const baseEdgesRef = useRef(graph.edges);
 
   useEffect(() => {
+    setBaseNodes(graph.nodes);
+    setBaseEdges(graph.edges);
     baseNodesRef.current = graph.nodes;
     baseEdgesRef.current = graph.edges;
-    setLocalNodes(graph.nodes);
-    setLocalEdges(graph.edges);
     setComponents(graph.components || []);
     setCompIndex(0);
     setAutoFocused(false);
     setFocusedId(null);
     setHoveredId(null);
   }, [graph]);
+
+  useEffect(() => {
+    baseNodesRef.current = baseNodes;
+  }, [baseNodes]);
+
+  useEffect(() => {
+    baseEdgesRef.current = baseEdges;
+  }, [baseEdges]);
 
   useEffect(() => {
     const el = wrapperRef.current;
@@ -528,7 +541,7 @@ function TraceGraphView({ graph }) {
 
   const instanceRef = useRef(null);
   const onInit = useCallback((inst) => { instanceRef.current = inst; }, []);
-  const fitAll = useCallback(() => instanceRef.current?.fitView({ padding: 0.18, duration: 520 }), []);
+  const fitAll = useCallback(() => instanceRef.current?.fitView({ padding: 0.2, duration: 480 }), []);
 
   const focusNode = useCallback((id) => {
     const node = baseNodesRef.current.find((n) => n.id === id);
@@ -542,14 +555,13 @@ function TraceGraphView({ graph }) {
 
   useEffect(() => {
     if (!ready || autoFocused || !instanceRef.current || baseNodesRef.current.length === 0) return;
-    const anchor = components[0]?.anchorId || baseNodesRef.current[0]?.id;
-    let r1 = 0, r2 = 0;
-    r1 = requestAnimationFrame(() => { r2 = requestAnimationFrame(() => { focusNode(anchor); setAutoFocused(true); }); });
-    return () => {
-      if (r1) cancelAnimationFrame(r1);
-      if (r2) cancelAnimationFrame(r2);
-    };
-  }, [ready, autoFocused, components, focusNode]);
+    let raf = 0;
+    raf = requestAnimationFrame(() => {
+      fitAll();
+      setAutoFocused(true);
+    });
+    return () => { if (raf) cancelAnimationFrame(raf); };
+  }, [ready, autoFocused, fitAll]);
 
   const goToComponent = useCallback((idx) => {
     if (!components.length) return;
@@ -602,30 +614,34 @@ function TraceGraphView({ graph }) {
 
   const isLight = theme === "light";
   const wrapperBg = isLight ? "#ffffff" : "#0e1116";
-  const gridColor = isLight ? "rgba(0,0,0,0.06)" : "rgba(90,176,255,0.12)";
+  const gridColor = isLight ? "rgba(0,0,0,0.06)" : "rgba(37, 99, 235, 0.24)";
   const maskColor = isLight ? "rgba(255,255,255,0.86)" : "rgba(7, 9, 12, 0.86)";
-  const miniMapNodeColor = (node) => node?.data?.accent || (isLight ? "#2563eb" : "#5ab0ff");
+  const miniMapNodeColor = () => PRIMARY_ACCENT;
   const defaultEdgeOptions = useMemo(() => ({
     type: "smoothstep",
     animated: true,
-    style: { strokeWidth: 2, strokeLinecap: "round" },
+    style: { strokeWidth: 2, strokeLinecap: "round", stroke: PRIMARY_ACCENT },
     markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18 },
     pathOptions: { borderRadius: 32 }
   }), []);
 
-  useEffect(() => {
-    const targetId = hoveredId ?? focusedId;
-    const baseNodes = baseNodesRef.current;
-    const baseEdges = baseEdgesRef.current;
-    if (!targetId) {
-      setLocalNodes(baseNodes.map((node) => ({ ...node, style: { ...(node.style || {}) } })));
-      setLocalEdges(baseEdges.map((edge) => ({ ...edge, style: { ...(edge.style || {}) } })));
-      return;
-    }
+  const cleanClass = useCallback((value = "") => value
+      .replace(/\bis-focused\b/g, "")
+      .replace(/\bis-related\b/g, "")
+      .replace(/\bis-dimmed\b/g, "")
+      .replace(/\s+/g, " ")
+      .trim(), []);
+
+  const decorateGraph = useCallback((nodes, edges, hovered, focused) => {
+    const baseNodes = nodes.map((node) => ({ ...node, className: cleanClass(node.className) }));
+    const baseEdges = edges.map((edge) => ({ ...edge, className: cleanClass(edge.className) }));
+
+    const targetId = hovered ?? focused;
+    if (!targetId) return { nodes: baseNodes, edges: baseEdges };
 
     const nodeById = new Map(baseNodes.map((node) => [node.id, node]));
     const active = nodeById.get(targetId);
-    if (!active) return;
+    if (!active) return { nodes: baseNodes, edges: baseEdges };
 
     const ancestorIds = new Set(active.data?.lineage || []);
     const descendantIds = new Set();
@@ -639,37 +655,35 @@ function TraceGraphView({ graph }) {
     }
     const related = new Set([targetId, ...ancestorIds, ...descendantIds]);
 
-    const cleanClass = (value = "") => value
-        .replace(/\bis-focused\b/g, "")
-        .replace(/\bis-related\b/g, "")
-        .replace(/\bis-dimmed\b/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
-
-    const nodes = baseNodes.map((node) => {
+    const nodesWithState = baseNodes.map((node) => {
       const isActive = node.id === targetId;
       const isRelated = related.has(node.id);
-      const className = `${cleanClass(node.className)}${isActive ? " is-focused" : ""}${!isActive && isRelated ? " is-related" : ""}${!isRelated ? " is-dimmed" : ""}`.trim();
-      return {
-        ...node,
-        className,
-        style: { ...(node.style || {}), opacity: isRelated ? 1 : 0.22 }
-      };
+      const className = `${node.className || ""}${isActive ? " is-focused" : ""}${!isActive && isRelated ? " is-related" : ""}${!isRelated ? " is-dimmed" : ""}`.trim();
+      return { ...node, className };
     });
 
-    const edges = baseEdges.map((edge) => {
+    const edgesWithState = baseEdges.map((edge) => {
       const isRelatedEdge = related.has(edge.source) && related.has(edge.target);
-      const className = `${cleanClass(edge.className)}${isRelatedEdge ? " is-related" : ""}${!isRelatedEdge ? " is-dimmed" : ""}`.trim();
-      return {
-        ...edge,
-        className,
-        style: { ...(edge.style || {}), opacity: isRelatedEdge ? 1 : 0.15 }
-      };
+      const className = `${edge.className || ""}${isRelatedEdge ? " is-related" : ""}${!isRelatedEdge ? " is-dimmed" : ""}`.trim();
+      return { ...edge, className };
     });
 
+    return { nodes: nodesWithState, edges: edgesWithState };
+  }, [cleanClass]);
+
+  useEffect(() => {
+    const { nodes, edges } = decorateGraph(baseNodes, baseEdges, hoveredId, focusedId);
     setLocalNodes(nodes);
     setLocalEdges(edges);
-  }, [hoveredId, focusedId]);
+  }, [baseNodes, baseEdges, hoveredId, focusedId, decorateGraph]);
+
+  const onNodesChange = useCallback((changes) => {
+    setBaseNodes((prev) => {
+      const updated = applyNodeChanges(changes, prev);
+      baseNodesRef.current = updated;
+      return updated;
+    });
+  }, []);
 
   return (
       <div ref={wrapperRef} className="trace-graph-wrapper"
@@ -708,9 +722,9 @@ function TraceGraphView({ graph }) {
                 edges={localEdges}
                 nodeTypes={NODE_TYPES}
                 onInit={onInit}
+                onNodesChange={onNodesChange}
                 minZoom={0.35}
                 maxZoom={2.4}
-                nodesDraggable={false}
                 nodesConnectable={false}
                 nodesFocusable={false}
                 elementsSelectable={false}
