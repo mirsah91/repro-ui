@@ -114,7 +114,15 @@ function useRrwebStream(sessionId) {
         log("pulled rrweb chunk", { limit, got: items.length, nextSeq: nextSeqRef.current, queue: queueRef.current.length });
     }
 
-    return { meta, status, queueRef, pullMore, doneRef };
+    const resetStream = React.useCallback(() => {
+        const first = Math.max(0, Number(meta?.firstSeq || 0));
+        queueRef.current = [];
+        nextSeqRef.current = first;
+        doneRef.current = false;
+        log("resetStream", { first });
+    }, [meta?.firstSeq]);
+
+    return { meta, status, queueRef, pullMore, doneRef, resetStream };
 }
 
 function tickTime(ev) {
@@ -153,7 +161,7 @@ export default function SessionReplay({ sessionId }) {
     const lastPausedTimeRef = useRef(0);
     const lastPlayerSizeRef = useRef({ width: 0, height: 0 });
 
-    const { status, queueRef, pullMore, doneRef } = useRrwebStream(sessionId);
+    const { status, queueRef, pullMore, doneRef, resetStream } = useRrwebStream(sessionId);
     const rawTicks = useTimeline(sessionId);
     const { status: traceStatus, entries: traceEntries } = useSessionTraces(sessionId);
 
@@ -180,6 +188,12 @@ export default function SessionReplay({ sessionId }) {
     useEffect(() => {
         setCollapsedGroups({});
     }, [showAll]);
+
+    useEffect(() => {
+        if (viewMode !== "replay") return;
+        if (status !== "ready") return;
+        resetStream();
+    }, [viewMode, status, resetStream]);
 
     useEffect(() => {
         if (!traceEntries.length) {
@@ -993,8 +1007,8 @@ export default function SessionReplay({ sessionId }) {
     );
 
     const timelinePanel = (
-        <aside className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t border-slate-200 bg-white lg:border-l lg:border-t-0">
-            <div className="border-b border-slate-200 px-8 py-4">
+        <aside className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden border-t border-slate-200 bg-white lg:border-l lg:border-t-0">
+            <div className="border-b border-slate-200 px-6 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Timeline</p>
@@ -1013,7 +1027,7 @@ export default function SessionReplay({ sessionId }) {
                     </label>
                 </div>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto px-8 py-6">
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-6 py-5">
                 {!renderGroups.length && (
                     <div className="border border-dashed border-slate-300 bg-slate-100 px-4 py-5 text-xs text-slate-600">
                         {showAll
@@ -1021,7 +1035,7 @@ export default function SessionReplay({ sessionId }) {
                             : "No events near the current playback time."}
                     </div>
                 )}
-                <div className="space-y-4">
+                <div className="min-w-0 space-y-4">
                     {renderGroups.map((g, gi) => {
                         const groupKey = g.id || `group-${gi}`;
                         const isCollapsed = Boolean(collapsedGroups[groupKey]);
@@ -1032,7 +1046,7 @@ export default function SessionReplay({ sessionId }) {
                         const windowLabel = action ? `${formatMaybeTime(startAligned)} → ${formatMaybeTime(endAligned)}` : null;
 
                         return (
-                            <div key={groupKey} className="border border-slate-200 bg-white">
+                            <div key={groupKey} className="w-full border border-slate-200 bg-white">
                                 <button
                                     type="button"
                                     onClick={() =>
@@ -1076,10 +1090,10 @@ export default function SessionReplay({ sessionId }) {
                                                     }`}
                                                 >
                                                     <div className="flex items-start justify-between gap-4">
-                                                        <div className="flex items-center gap-3">
+                                                        <div className="flex min-w-0 items-start gap-3">
                                                             <span className={`h-2 w-2 ${KIND_COLORS[e.kind] || "bg-slate-500"}`} />
-                                                            <div>
-                                                                <div className="text-sm font-semibold text-slate-900">{getMarkerTitle(e)}</div>
+                                                            <div className="min-w-0">
+                                                                <div className="break-words text-sm font-semibold text-slate-900">{getMarkerTitle(e)}</div>
                                                                 <div className="mt-1 text-[11px] uppercase tracking-[0.28em] text-slate-400">{e.kind}</div>
                                                             </div>
                                                         </div>
@@ -1091,7 +1105,7 @@ export default function SessionReplay({ sessionId }) {
 
                                                     {isRequest && (
                                                         <div className="space-y-2 text-xs text-slate-600">
-                                                            <div className="font-mono text-sm text-slate-900">
+                                                            <div className="break-words font-mono text-sm text-slate-900">
                                                                 {e.meta?.method} {e.meta?.url}
                                                             </div>
                                                             <div className="flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.28em] text-slate-500">
@@ -1100,12 +1114,12 @@ export default function SessionReplay({ sessionId }) {
                                                                 {typeof e.meta?.size === "number" && <span>{e.meta.size} bytes</span>}
                                                             </div>
                                                             {e.meta?.body && (
-                                                                <pre className="max-h-40 overflow-auto border border-slate-300 bg-slate-100 p-3 text-[11px] leading-relaxed text-slate-700">
+                                                                <pre className="max-h-40 max-w-full overflow-auto border border-slate-300 bg-slate-100 p-3 text-[11px] leading-relaxed text-slate-700">
                                                                     {JSON.stringify(e.meta.body, null, 2)}
                                                                 </pre>
                                                             )}
                                                             {e.meta?.response && (
-                                                                <pre className="max-h-40 overflow-auto border border-slate-300 bg-slate-100 p-3 text-[11px] leading-relaxed text-slate-700">
+                                                                <pre className="max-h-40 max-w-full overflow-auto border border-slate-300 bg-slate-100 p-3 text-[11px] leading-relaxed text-slate-700">
                                                                     {JSON.stringify(e.meta.response, null, 2)}
                                                                 </pre>
                                                             )}
@@ -1113,11 +1127,11 @@ export default function SessionReplay({ sessionId }) {
                                                     )}
                                                     {isDb && (
                                                         <div className="space-y-2 text-xs text-slate-600">
-                                                            <div className="font-mono text-sm text-slate-900">
+                                                            <div className="break-words font-mono text-sm text-slate-900">
                                                                 {e.meta?.collection} • {e.meta?.op}
                                                             </div>
                                                             {e.meta?.query && (
-                                                                <pre className="max-h-36 overflow-auto border border-slate-300 bg-slate-100 p-3 text-[11px] leading-relaxed text-slate-700">
+                                                                <pre className="max-h-36 max-w-full overflow-auto border border-slate-300 bg-slate-100 p-3 text-[11px] leading-relaxed text-slate-700">
                                                                     {JSON.stringify(e.meta.query, null, 2)}
                                                                 </pre>
                                                             )}
@@ -1128,7 +1142,7 @@ export default function SessionReplay({ sessionId }) {
                                                     )}
                                                     {isAction && (
                                                         <div className="space-y-1 text-xs text-slate-600">
-                                                            <div className="font-mono text-sm text-slate-900">{e.label || e.actionId}</div>
+                                                            <div className="break-words font-mono text-sm text-slate-900">{e.label || e.actionId}</div>
                                                             {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
                                                                 <div className="text-[11px] text-slate-500">[{e.tStart ?? "—"} … {e.tEnd ?? "—"}]</div>
                                                             )}
@@ -1154,7 +1168,7 @@ export default function SessionReplay({ sessionId }) {
 
     const tracePanelContent = (
         <>
-            <div className="border-b border-slate-200 px-8 py-4">
+            <div className="border-b border-slate-200 px-6 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Function traces</p>
@@ -1164,7 +1178,7 @@ export default function SessionReplay({ sessionId }) {
                 </div>
                 <p className="mt-2 text-xs text-slate-500">Select a request to inspect its captured trace.</p>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto px-8 py-6">
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-6 py-5">
                 <div className="flex min-h-0 flex-1 flex-col gap-4">
                     {traceStatus === "loading" && !traceEntries.length && (
                         <div className="border border-slate-200 bg-slate-100 px-4 py-4 text-xs text-slate-600">Fetching trace data…</div>
@@ -1179,7 +1193,7 @@ export default function SessionReplay({ sessionId }) {
                         <div className="border border-slate-200 bg-slate-100 px-4 py-4 text-xs text-slate-600">Traces will appear once data is collected for this session.</div>
                     )}
                     {traceEntries.length > 0 && (
-                        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+                        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden">
                             {traceEntries.map((entry) => {
                                 const isActive = selectedTrace?.id === entry.id;
                                 const meta = entry.request || {};
@@ -1196,8 +1210,8 @@ export default function SessionReplay({ sessionId }) {
                                                 isActive ? "bg-slate-100" : "bg-white hover:bg-slate-50"
                                             }`}
                                         >
-                                            <div>
-                                                <div className="text-sm font-semibold text-slate-900">{label}</div>
+                                            <div className="min-w-0">
+                                                <div className="break-words text-sm font-semibold text-slate-900">{label}</div>
                                                 <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.25em] text-slate-500">
                                                     <span>Status {meta.status ?? "—"}</span>
                                                     <span>{meta.durMs != null ? `${meta.durMs}ms` : "—"}</span>
@@ -1268,13 +1282,13 @@ export default function SessionReplay({ sessionId }) {
                     <span>{viewMode === "replay" ? timelineSummaryText : traceSummaryText}</span>
                 </div>
             </header>
-            <main className="flex flex-1 min-h-0 min-w-0 flex-col">
+            <main className="flex flex-1 min-h-0 min-w-0 flex-col overflow-x-hidden">
                 {viewMode === "replay" ? (
-                    <div className="flex flex-1 min-h-0 flex-col lg:flex-row">
+                    <div className="flex flex-1 min-h-0 flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_26rem] xl:grid-cols-[minmax(0,1fr)_30rem]">
                         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                             {playbackSection}
                         </div>
-                        <div className="flex min-h-0 w-full min-w-0 flex-col lg:w-[24rem] lg:flex-none">
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-none">
                             {timelinePanel}
                         </div>
                     </div>
