@@ -1236,13 +1236,13 @@ export default function SessionReplay({ sessionId }) {
     );
 
     const traceFullView = (
-        <section className="flex min-h-0 flex-1 flex-col border-t border-slate-200 bg-white">
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden border-t border-slate-200 bg-white">
             {tracePanelContent}
         </section>
     );
 
     return (
-        <div className="flex min-h-screen min-w-0 flex-col overflow-x-hidden bg-slate-100 text-slate-900">
+        <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-slate-100 text-slate-900">
             <header className="border-b border-slate-200 bg-white px-8 py-5">
                 <div className="flex flex-wrap items-center justify-between gap-4">
                     <div className="flex items-center gap-4">
@@ -1282,18 +1282,18 @@ export default function SessionReplay({ sessionId }) {
                     <span>{viewMode === "replay" ? timelineSummaryText : traceSummaryText}</span>
                 </div>
             </header>
-            <main className="flex flex-1 min-h-0 min-w-0 flex-col overflow-x-hidden">
+            <main className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden">
                 {viewMode === "replay" ? (
                     <div className="flex flex-1 min-h-0 flex-col lg:flex-row">
                         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                             {playbackSection}
                         </div>
-                        <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:w-[26rem] lg:flex-none lg:shrink-0 xl:w-[30rem]">
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:w-[26rem] lg:flex-none lg:shrink-0 xl:w-[30rem]">
                             {timelinePanel}
                         </div>
                     </div>
                 ) : (
-                    <div className="flex flex-1 min-h-0 flex-col">
+                    <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
                         {traceFullView}
                     </div>
                 )}
