@@ -7,8 +7,8 @@
   --trace-fg: #0f172a;
   --trace-muted: #475569;
   --trace-muted-strong: #1f2937;
-  --trace-accent: #1d4ed8;
-  --trace-keyword: #1d4ed8;
+  --trace-accent: #2563eb;
+  --trace-keyword: #2563eb;
   --trace-error: #dc2626;
   --trace-chip-bg: rgba(148, 163, 184, 0.15);
   --trace-code-bg: #e2e8f0;
@@ -420,81 +420,174 @@
 }
 
 .trace-graph-wrapper .react-flow__handle {
-  width: 10px;
-  height: 10px;
-  background: transparent;
-  border: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 2px solid var(--node-accent, var(--trace-accent));
+  background: #f8fafc;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.85);
 }
 
 .trace-graph-wrapper .react-flow__edge-path {
-  stroke: rgba(59, 130, 246, 0.6);
-  stroke-width: 1.8;
+  stroke-width: 2;
   stroke-linecap: round;
+  transition: stroke 220ms ease, opacity 200ms ease, filter 220ms ease;
 }
 
-.trace-graph-wrapper .react-flow__edge-path:hover {
-  stroke: rgba(59, 130, 246, 0.85);
+.trace-graph-wrapper .react-flow__edge.is-dimmed .react-flow__edge-path {
+  stroke-dasharray: 8 6;
+  opacity: 0.22;
+}
+
+.trace-graph-wrapper .react-flow__edge.is-related .react-flow__edge-path {
+  filter: drop-shadow(0 0 14px rgba(37, 99, 235, 0.35));
+  opacity: 1;
+}
+
+.trace-graph-wrapper .react-flow__node.is-dimmed {
+  opacity: 0.24;
+}
+
+.trace-graph-wrapper .react-flow__node {
+  transition: transform 360ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease;
 }
 
 .trace-graph-wrapper .react-flow__node-traceNode {
   padding: 0;
   background: transparent;
   border: none;
-  filter: drop-shadow(0 14px 28px rgba(15, 23, 42, 0.18));
+  filter: drop-shadow(0 20px 36px rgba(15, 23, 42, 0.18));
 }
 
 .graph-node-card {
+  position: relative;
   pointer-events: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  background: #ffffff;
-  border: 1px solid var(--trace-border);
-  padding: 14px 16px;
-  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+  display: grid;
+  gap: 12px;
+  padding: 18px 18px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: inset 0 4px 0 var(--node-accent, var(--trace-accent)), 0 18px 36px rgba(15, 23, 42, 0.14);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), var(--node-surface, rgba(226, 232, 240, 0.45)) 100%);
   font-family: var(--trace-mono);
   font-size: 12px;
   color: var(--trace-muted-strong);
+  overflow: hidden;
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 220ms ease, border-color 200ms ease;
+  animation: graph-node-fade 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.graph-node-card::before,
+.graph-node-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  transition: opacity 260ms ease, transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.graph-node-card::before {
+  background: radial-gradient(circle at top, rgba(37, 99, 235, 0.16), transparent 68%);
+  opacity: 0;
+  transform: scale(0.95);
+}
+
+.graph-node-card::after {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.6), transparent 55%);
+  opacity: 0.7;
+}
+
+.graph-node-card:hover {
+  transform: translateY(-6px) scale(1.01);
+  box-shadow: inset 0 4px 0 var(--node-accent, var(--trace-accent)), 0 24px 42px rgba(15, 23, 42, 0.18);
+}
+
+.graph-node-card:hover::before {
+  opacity: 0.45;
+  transform: scale(1);
 }
 
 .graph-node-card.is-error {
-  border-color: var(--trace-error);
-  box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.25), 0 16px 32px rgba(220, 38, 38, 0.16);
+  box-shadow: inset 0 4px 0 var(--trace-error), 0 18px 32px rgba(220, 38, 38, 0.18);
+  border-color: rgba(220, 38, 38, 0.45);
 }
 
 .graph-node-card.is-event {
-  border-style: dashed;
+  box-shadow: inset 0 4px 0 var(--node-accent, var(--trace-accent)), 0 18px 32px rgba(37, 99, 235, 0.18);
 }
 
 .graph-node-head {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  position: relative;
+  z-index: 1;
+}
+
+.graph-node-title {
+  display: inline-flex;
+  flex-wrap: wrap;
   gap: 6px;
   align-items: baseline;
-  flex-wrap: wrap;
 }
 
 .graph-node-body {
   display: grid;
-  gap: 6px;
+  gap: 10px;
+  position: relative;
+  z-index: 1;
 }
 
-.graph-node-return {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
+.graph-node-summary {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.graph-node-summary .summary-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(15, 23, 42, 0.65);
+}
+
+.graph-node-summary .return {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--trace-muted-strong);
+  word-break: break-word;
+}
+
+.graph-node-summary .return.is-throw {
+  color: var(--trace-error);
 }
 
 .graph-node-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   font-size: 11px;
   color: var(--trace-muted);
 }
 
+.graph-node-meta .meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: rgba(15, 23, 42, 0.75);
+}
+
 .graph-node-card .fn-name {
   font-weight: 600;
-  color: var(--trace-accent);
+  color: var(--node-accent, var(--trace-accent));
 }
 
 .graph-node-card .keyword {
@@ -502,18 +595,25 @@
 }
 
 .graph-node-card .args {
-  color: var(--trace-muted);
+  color: rgba(15, 23, 42, 0.6);
 }
 
 .graph-node-card .call-tag,
 .graph-node-card .event-badge {
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
-  align-self: flex-start;
-  padding: 2px 6px;
-  border: 1px solid rgba(148, 163, 184, 0.5);
-  background: rgba(148, 163, 184, 0.15);
+  letter-spacing: 0.16em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: rgba(255, 255, 255, 0.65);
+  color: var(--node-accent, var(--trace-accent));
+}
+
+.graph-node-card.is-event .event-badge {
+  color: var(--node-accent, var(--trace-accent));
+  border-color: rgba(37, 99, 235, 0.45);
+  background: rgba(37, 99, 235, 0.12);
 }
 
 .trace-graph-wrapper .react-flow__panel {
@@ -588,22 +688,101 @@
 .trace-graph-wrapper { width: 100%; height: 100%; min-height: 420px; position: relative; }
 .trace-graph-flow { width: 100%; height: 100%; }
 
+
 .react-flow__node.is-focused .graph-node-card,
 .graph-node-card.is-focused {
-  outline: none;
+  transform: translateY(-10px) scale(1.03);
+  box-shadow: inset 0 4px 0 var(--node-accent, var(--trace-accent)), 0 28px 48px rgba(15, 23, 42, 0.22);
+  border-color: rgba(15, 23, 42, 0.12);
+  animation: graph-node-pulse 1200ms ease-out;
+}
+
+.react-flow__node.is-related:not(.is-focused) .graph-node-card,
+.graph-node-card.is-related {
+  box-shadow: inset 0 4px 0 var(--node-accent, var(--trace-accent)), 0 20px 38px rgba(15, 23, 42, 0.16);
+}
+
+.react-flow__node.is-dimmed .graph-node-card,
+.graph-node-card.is-dimmed {
+  filter: saturate(0.55) brightness(0.95);
+}
+
+.react-flow__node.is-related .graph-node-card::before,
+.graph-node-card.is-related::before {
+  opacity: 0.4;
+  transform: scale(1.02);
+  animation: graph-node-glimmer 2600ms ease-in-out infinite alternate;
+}
+
+.react-flow__node.is-focused .graph-node-card::before,
+.graph-node-card.is-focused::before {
+  opacity: 0.75;
+  transform: scale(1.05);
+  animation: graph-node-focusGlow 1200ms ease-out;
 }
 
 .graph-node-card.is-ghost,
 .trace-card.is-ghost {
-  opacity: 0.45;
-  filter: saturate(0.7);
+  opacity: 0.55;
+  filter: saturate(0.6);
 }
 
 .graph-node-card .ghost-pill {
-  display: inline-block;
-  padding: 2px 6px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
   margin-left: 6px;
   font-size: 11px;
-  opacity: 0.8;
-  border: 1px solid currentColor;
+  border: 1px dashed currentColor;
+  border-radius: 999px;
+}
+
+@keyframes graph-node-fade {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes graph-node-pulse {
+  0% {
+    box-shadow: inset 0 4px 0 var(--node-accent, var(--trace-accent)), 0 24px 44px rgba(37, 99, 235, 0.16);
+  }
+  55% {
+    box-shadow: inset 0 4px 0 var(--node-accent, var(--trace-accent)), 0 36px 58px rgba(37, 99, 235, 0.28);
+  }
+  100% {
+    box-shadow: inset 0 4px 0 var(--node-accent, var(--trace-accent)), 0 26px 46px rgba(37, 99, 235, 0.2);
+  }
+}
+
+@keyframes graph-node-focusGlow {
+  0% {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  60% {
+    opacity: 0.85;
+    transform: scale(1.05);
+  }
+  100% {
+    opacity: 0.75;
+    transform: scale(1.02);
+  }
+}
+
+@keyframes graph-node-glimmer {
+  0% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 0.32;
+  }
 }

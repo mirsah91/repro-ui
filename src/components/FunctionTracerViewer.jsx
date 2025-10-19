@@ -1,6 +1,14 @@
 // FunctionTraceViewer.jsx
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import ReactFlow, { Background, Controls, MiniMap, Handle, Position } from "reactflow";
+import ReactFlow, {
+  Background,
+  Controls,
+  MiniMap,
+  Handle,
+  Position,
+  MarkerType,
+  applyNodeChanges
+} from "reactflow";
 import "reactflow/dist/style.css";
 import "./FunctionTraceViewer.css";
 
@@ -240,48 +248,115 @@ function CallNode({ call, depth, compact, showFull }) {
 }
 
 /* =============================== Graph view ============================== */
-const LAYOUT = { columnWidth: 280, rowHeight: 180, nodeWidth: 240, nodeHeight: 130 };
+const LAYOUT = {
+  columnWidth: 280,
+  rowHeight: 220,
+  nodeWidth: 260,
+  nodeHeight: 150,
+  subtreeGapCols: 1.25
+};
+
+const PRIMARY_ACCENT = "#2563eb";
+const PRIMARY_SURFACE = "rgba(37, 99, 235, 0.12)";
+const EVENT_SURFACE = "rgba(37, 99, 235, 0.18)";
+
+const depthStyle = () => ({ accent: PRIMARY_ACCENT, surface: PRIMARY_SURFACE });
 
 function buildGraphLayout(callRoots, { pack = true } = {}) {
   const allNodes = [];
   const allEdges = [];
-  for (const root of callRoots) {
-    let order = 0; // vertical order within this root follows encounter order
-    const assign = (node, depth, parentId) => {
-      const enter = node.enter || {};
-      const exit = node.exit || {};
-      const isEvent = Boolean(node.isEventOnly);
-      const isError = Boolean((node.exit || {})?.error || (node.exit || {})?.threw);
-      const name = enter.fn || exit.fn || (isEvent ? enter.type || "event" : "(anonymous)");
-      const duration = enter && exit ? fmtDur(enter.time, exit.time) : null;
-      const resultPreview = isEvent
-          ? formatValue(enter, { limit: 80 })
-          : exit?.threw
-              ? `throw ${formatValue(exit.error ?? exit.returnValue, { limit: 80 })}`
-              : "returnValue" in (exit || {})
-                  ? formatValue(exit.returnValue, { limit: 80 })
-                  : exit
-                      ? "void"
-                      : "…";
-      const argsPreview = isEvent ? null : formatArgsSignature(enter.args, 80);
-      const locationFile = enter.file || exit.file;
-      const locationLine = enter.line ?? exit.line;
-      const location = locationFile ? `${trimPath(locationFile)}${locationLine != null ? ":" + locationLine : ""}` : null;
+  let colCursor = 0;
 
-      allNodes.push({
-        id: node.id,
-        type: "traceNode",
-        position: { x: depth * LAYOUT.columnWidth, y: order * LAYOUT.rowHeight },
-        data: { enter, exit, isEvent, isError, name, argsPreview, resultPreview, duration, location, ghost: !!node.ghost }
-      });
+  const placeNode = (node, depth, parentId, lineage) => {
+    const enter = node.enter || {};
+    const exit = node.exit || {};
+    const isEvent = Boolean(node.isEventOnly);
+    const isError = Boolean((node.exit || {})?.error || (node.exit || {})?.threw);
+    const name = enter.fn || exit.fn || (isEvent ? enter.type || "event" : "(anonymous)");
+    const duration = enter && exit ? fmtDur(enter.time, exit.time) : null;
+    const resultPreview = isEvent
+        ? formatValue(enter, { limit: 80 })
+        : exit?.threw
+            ? `throw ${formatValue(exit.error ?? exit.returnValue, { limit: 80 })}`
+            : "returnValue" in (exit || {})
+                ? formatValue(exit.returnValue, { limit: 80 })
+                : exit
+                    ? "void"
+                    : "…";
+    const argsPreview = isEvent ? null : formatArgsSignature(enter.args, 80);
+    const locationFile = enter.file || exit.file;
+    const locationLine = enter.line ?? exit.line;
+    const location = locationFile ? `${trimPath(locationFile)}${locationLine != null ? ":" + locationLine : ""}` : null;
+    const callTag = !isEvent ? enter?.type : null;
 
-      const currentId = node.id;
-      order += 1;
+    const children = node.children || [];
+    const childCenters = [];
+    for (const child of children) {
+      childCenters.push(placeNode(child, depth + 1, node.id, [...lineage, node.id]));
+    }
 
-      if (parentId) allEdges.push({ id: `${parentId}->${currentId}`, source: parentId, target: currentId, type: "smoothstep" });
-      for (const child of node.children || []) assign(child, depth + 1, currentId);
+    let centerX;
+    if (childCenters.length === 0) {
+      centerX = colCursor * LAYOUT.columnWidth;
+      colCursor += 1;
+    } else {
+      const minCenter = Math.min(...childCenters);
+      const maxCenter = Math.max(...childCenters);
+      centerX = (minCenter + maxCenter) / 2;
+    }
+
+    const depthStyles = isEvent ? { accent: PRIMARY_ACCENT, surface: EVENT_SURFACE } : depthStyle(depth);
+
+    const nodeEntry = {
+      id: node.id,
+      type: "traceNode",
+      position: { x: centerX, y: depth * LAYOUT.rowHeight },
+      data: {
+        enter,
+        exit,
+        isEvent,
+        isError,
+        name,
+        argsPreview,
+        resultPreview,
+        duration,
+        location,
+        ghost: !!node.ghost,
+        depth,
+        accent: depthStyles.accent,
+        surface: depthStyles.surface,
+        callTag,
+        parentId,
+        childIds: children.map((child) => child.id),
+        lineage,
+        order: node.enter?.index ?? node.exit?.index ?? 0
+      },
+      style: {
+        "--node-accent": depthStyles.accent,
+        "--node-surface": depthStyles.surface
+      }
     };
-    assign(root, 0, null);
+
+    allNodes.push(nodeEntry);
+    if (parentId) {
+      allEdges.push({
+        id: `${parentId}->${node.id}`,
+        source: parentId,
+        target: node.id,
+        animated: true,
+        type: "smoothstep",
+        data: { depth, accent: depthStyles.accent },
+        style: { stroke: depthStyles.accent, strokeWidth: 2 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: depthStyles.accent, width: 18, height: 18 }
+      });
+    }
+
+    return centerX;
+  };
+
+  for (const root of callRoots) {
+    placeNode(root, 0, null, []);
+    colCursor += LAYOUT.subtreeGapCols;
   }
 
   // components by connectivity
@@ -313,10 +388,17 @@ function buildGraphLayout(callRoots, { pack = true } = {}) {
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const cn of compNodes) {
-      minX = Math.min(minX, cn.position.x);
-      minY = Math.min(minY, cn.position.y);
-      maxX = Math.max(maxX, cn.position.x + (cn.measured?.width ?? LAYOUT.nodeWidth));
-      maxY = Math.max(maxY, cn.position.y + (cn.measured?.height ?? LAYOUT.nodeHeight));
+      const width = cn.measured?.width ?? LAYOUT.nodeWidth;
+      const height = cn.measured?.height ?? LAYOUT.nodeHeight;
+      const half = width / 2;
+      const left = cn.position.x - half;
+      const right = cn.position.x + half;
+      const top = cn.position.y;
+      const bottom = top + height;
+      minX = Math.min(minX, left);
+      minY = Math.min(minY, top);
+      maxX = Math.max(maxX, right);
+      maxY = Math.max(maxY, bottom);
     }
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
@@ -360,28 +442,33 @@ function buildGraphLayout(callRoots, { pack = true } = {}) {
 
 /* ======================= Custom Node & NodeTypes ======================== */
 function TraceFlowNodeView({ data }) {
-  const { isEvent, isError, name, argsPreview, resultPreview, duration, location, exit, enter, ghost } = data;
+  const { isEvent, isError, name, argsPreview, resultPreview, duration, location, exit, enter, ghost, depth, callTag } = data;
+  const summaryLabel = exit?.threw ? "throws" : isEvent ? "payload" : "returns";
+
   return (
-      <div className={`graph-node-card${isError ? " is-error" : ""}${isEvent ? " is-event" : ""}${ghost ? " is-ghost" : ""}`}>
-        <Handle type="target" position={Position.Left} id="in" />
-        <Handle type="source" position={Position.Right} id="out" />
+      <div className={`graph-node-card${isError ? " is-error" : ""}${isEvent ? " is-event" : ""}${ghost ? " is-ghost" : ""}`} data-depth={depth}>
+        <Handle type="target" position={Position.Top} id="in" style={{ top: -10 }} />
         <div className="graph-node-head">
-          {!isEvent && <span className="keyword">function</span>}
-          <span className="fn-name">{name}</span>
-          {!isEvent && <span className="args">{argsPreview}</span>}
+          <div className="graph-node-title">
+            {!isEvent && <span className="keyword">function</span>}
+            <span className="fn-name">{name}</span>
+            {!isEvent && <span className="args">{argsPreview}</span>}
+          </div>
+          {!isEvent && callTag && <span className="call-tag">{callTag}</span>}
+          {isEvent && <span className="event-badge">{enter?.type}</span>}
         </div>
         <div className="graph-node-body">
-          <div className="graph-node-return">
-            <span className="arrow">⇒</span>
+          <div className="graph-node-summary" role="group" aria-label={isEvent ? "Event payload" : exit?.threw ? "Thrown value" : "Return value"}>
+            <span className="summary-label">{summaryLabel}</span>
             <span className={`return${exit?.threw ? " is-throw" : ""}`}>{resultPreview}</span>
           </div>
           <div className="graph-node-meta">
-            {duration && <span>⏱ {duration}</span>}
-            {location && <span>📍 {location}</span>}
+            {duration && <span className="meta-item">⏱ {duration}</span>}
+            {location && <span className="meta-item">📍 {location}</span>}
             {ghost && <span className="ghost-pill">collapsed</span>}
           </div>
         </div>
-        {isEvent && <span className="event-badge">{enter?.type}</span>}
+        <Handle type="source" position={Position.Bottom} id="out" style={{ bottom: -10 }} />
       </div>
   );
 }
@@ -407,22 +494,39 @@ const btnStyle = (isLight) => ({
 function TraceGraphView({ graph }) {
   const wrapperRef = useRef(null);
   const [ready, setReady] = useState(false);
+  const [baseNodes, setBaseNodes] = useState(graph.nodes);
+  const [baseEdges, setBaseEdges] = useState(graph.edges);
   const [localNodes, setLocalNodes] = useState(graph.nodes);
   const [localEdges, setLocalEdges] = useState(graph.edges);
   const [components, setComponents] = useState(graph.components || []);
   const [focusedId, setFocusedId] = useState(null);
+  const [hoveredId, setHoveredId] = useState(null);
   const [compIndex, setCompIndex] = useState(0);
   const [q, setQ] = useState("");
   const [theme, setTheme] = useState("light");
   const [autoFocused, setAutoFocused] = useState(false);
+  const baseNodesRef = useRef(graph.nodes);
+  const baseEdgesRef = useRef(graph.edges);
 
   useEffect(() => {
-    setLocalNodes(graph.nodes);
-    setLocalEdges(graph.edges);
+    setBaseNodes(graph.nodes);
+    setBaseEdges(graph.edges);
+    baseNodesRef.current = graph.nodes;
+    baseEdgesRef.current = graph.edges;
     setComponents(graph.components || []);
     setCompIndex(0);
     setAutoFocused(false);
+    setFocusedId(null);
+    setHoveredId(null);
   }, [graph]);
+
+  useEffect(() => {
+    baseNodesRef.current = baseNodes;
+  }, [baseNodes]);
+
+  useEffect(() => {
+    baseEdgesRef.current = baseEdges;
+  }, [baseEdges]);
 
   useEffect(() => {
     const el = wrapperRef.current;
@@ -437,34 +541,27 @@ function TraceGraphView({ graph }) {
 
   const instanceRef = useRef(null);
   const onInit = useCallback((inst) => { instanceRef.current = inst; }, []);
-  const fitAll = useCallback(() => instanceRef.current?.fitView({ padding: 0.15, duration: 500 }), []);
+  const fitAll = useCallback(() => instanceRef.current?.fitView({ padding: 0.2, duration: 480 }), []);
 
   const focusNode = useCallback((id) => {
-    const node = localNodes.find((n) => n.id === id);
+    const node = baseNodesRef.current.find((n) => n.id === id);
     if (!node) return;
     setFocusedId(id);
-    setLocalNodes((prev) =>
-        prev.map((n) => ({
-          ...n,
-          className:
-              n.id === id
-                  ? `${(n.className || "").replace(/\bis-focused\b/g, "").trim()} is-focused`
-                  : (n.className || "").replace(/\bis-focused\b/g, "").trim()
-        }))
-    );
-    const w = node?.measured?.width ?? 240;
-    const h = node?.measured?.height ?? 130;
-    instanceRef.current?.setCenter(node.position.x + w / 2, node.position.y + h / 2, { zoom: 1.1, duration: 450 });
-  }, [localNodes]);
+    setHoveredId(null);
+    const width = node?.measured?.width ?? LAYOUT.nodeWidth;
+    const height = node?.measured?.height ?? LAYOUT.nodeHeight;
+    instanceRef.current?.setCenter(node.position.x, node.position.y + height / 2, { zoom: 1.08, duration: 480 });
+  }, [setHoveredId, setFocusedId]);
 
-  // Auto focus first component’s anchor
   useEffect(() => {
-    if (!ready || autoFocused || !instanceRef.current || localNodes.length === 0) return;
-    const anchor = components[0]?.anchorId || localNodes[0]?.id;
-    let r1 = 0, r2 = 0;
-    r1 = requestAnimationFrame(() => { r2 = requestAnimationFrame(() => { focusNode(anchor); setAutoFocused(true); }); });
-    return () => { if (r1) cancelAnimationFrame(r1); if (r2) cancelAnimationFrame(r2); };
-  }, [ready, autoFocused, localNodes, components, focusNode]);
+    if (!ready || autoFocused || !instanceRef.current || baseNodesRef.current.length === 0) return;
+    let raf = 0;
+    raf = requestAnimationFrame(() => {
+      fitAll();
+      setAutoFocused(true);
+    });
+    return () => { if (raf) cancelAnimationFrame(raf); };
+  }, [ready, autoFocused, fitAll]);
 
   const goToComponent = useCallback((idx) => {
     if (!components.length) return;
@@ -477,7 +574,7 @@ function TraceGraphView({ graph }) {
     e?.preventDefault?.();
     const needle = q.trim().toLowerCase();
     if (!needle) return;
-    const scored = localNodes
+    const scored = baseNodesRef.current
         .map((n) => {
           const d = n.data || {};
           const name = (d.name || "").toLowerCase();
@@ -491,7 +588,7 @@ function TraceGraphView({ graph }) {
         .filter((r) => r.score > 0)
         .sort((a, b) => b.score - a.score);
     if (scored.length) focusNode(scored[0].id);
-  }, [q, localNodes, focusNode]);
+  }, [q, focusNode]);
 
   useEffect(() => {
     const onKey = (ev) => {
@@ -502,7 +599,7 @@ function TraceGraphView({ graph }) {
       if ((ev.key === "f" || ev.key === "F") && !ev.metaKey && !ev.ctrlKey && !ev.altKey) { ev.preventDefault(); fitAll(); }
       if (ev.key === "Escape") {
         setFocusedId(null);
-        setLocalNodes((prev) => prev.map((n) => ({ ...n, className: (n.className || "").replace(/\bis-focused\b/g, "").trim() })));
+        setHoveredId(null);
       }
       if (ev.key === "Enter") {
         const active = document.activeElement;
@@ -517,10 +614,76 @@ function TraceGraphView({ graph }) {
 
   const isLight = theme === "light";
   const wrapperBg = isLight ? "#ffffff" : "#0e1116";
-  const gridColor = isLight ? "rgba(0,0,0,0.06)" : "rgba(90,176,255,0.12)";
+  const gridColor = isLight ? "rgba(0,0,0,0.06)" : "rgba(37, 99, 235, 0.24)";
   const maskColor = isLight ? "rgba(255,255,255,0.86)" : "rgba(7, 9, 12, 0.86)";
-  const miniMapNodeColor = (node) =>
-      node.data?.isEvent ? (isLight ? "#6c79ff" : "#8f9eff") : (isLight ? "#2f77d1" : "#5ab0ff");
+  const miniMapNodeColor = () => PRIMARY_ACCENT;
+  const defaultEdgeOptions = useMemo(() => ({
+    type: "smoothstep",
+    animated: true,
+    style: { strokeWidth: 2, strokeLinecap: "round", stroke: PRIMARY_ACCENT },
+    markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18 },
+    pathOptions: { borderRadius: 32 }
+  }), []);
+
+  const cleanClass = useCallback((value = "") => value
+      .replace(/\bis-focused\b/g, "")
+      .replace(/\bis-related\b/g, "")
+      .replace(/\bis-dimmed\b/g, "")
+      .replace(/\s+/g, " ")
+      .trim(), []);
+
+  const decorateGraph = useCallback((nodes, edges, hovered, focused) => {
+    const baseNodes = nodes.map((node) => ({ ...node, className: cleanClass(node.className) }));
+    const baseEdges = edges.map((edge) => ({ ...edge, className: cleanClass(edge.className) }));
+
+    const targetId = hovered ?? focused;
+    if (!targetId) return { nodes: baseNodes, edges: baseEdges };
+
+    const nodeById = new Map(baseNodes.map((node) => [node.id, node]));
+    const active = nodeById.get(targetId);
+    if (!active) return { nodes: baseNodes, edges: baseEdges };
+
+    const ancestorIds = new Set(active.data?.lineage || []);
+    const descendantIds = new Set();
+    const queue = [...(active.data?.childIds || [])];
+    while (queue.length) {
+      const nextId = queue.shift();
+      if (descendantIds.has(nextId)) continue;
+      descendantIds.add(nextId);
+      const nextNode = nodeById.get(nextId);
+      if (nextNode) queue.push(...(nextNode.data?.childIds || []));
+    }
+    const related = new Set([targetId, ...ancestorIds, ...descendantIds]);
+
+    const nodesWithState = baseNodes.map((node) => {
+      const isActive = node.id === targetId;
+      const isRelated = related.has(node.id);
+      const className = `${node.className || ""}${isActive ? " is-focused" : ""}${!isActive && isRelated ? " is-related" : ""}${!isRelated ? " is-dimmed" : ""}`.trim();
+      return { ...node, className };
+    });
+
+    const edgesWithState = baseEdges.map((edge) => {
+      const isRelatedEdge = related.has(edge.source) && related.has(edge.target);
+      const className = `${edge.className || ""}${isRelatedEdge ? " is-related" : ""}${!isRelatedEdge ? " is-dimmed" : ""}`.trim();
+      return { ...edge, className };
+    });
+
+    return { nodes: nodesWithState, edges: edgesWithState };
+  }, [cleanClass]);
+
+  useEffect(() => {
+    const { nodes, edges } = decorateGraph(baseNodes, baseEdges, hoveredId, focusedId);
+    setLocalNodes(nodes);
+    setLocalEdges(edges);
+  }, [baseNodes, baseEdges, hoveredId, focusedId, decorateGraph]);
+
+  const onNodesChange = useCallback((changes) => {
+    setBaseNodes((prev) => {
+      const updated = applyNodeChanges(changes, prev);
+      baseNodesRef.current = updated;
+      return updated;
+    });
+  }, []);
 
   return (
       <div ref={wrapperRef} className="trace-graph-wrapper"
@@ -559,9 +722,9 @@ function TraceGraphView({ graph }) {
                 edges={localEdges}
                 nodeTypes={NODE_TYPES}
                 onInit={onInit}
+                onNodesChange={onNodesChange}
                 minZoom={0.35}
                 maxZoom={2.4}
-                nodesDraggable={false}
                 nodesConnectable={false}
                 nodesFocusable={false}
                 elementsSelectable={false}
@@ -569,6 +732,12 @@ function TraceGraphView({ graph }) {
                 panOnDrag
                 panOnScroll
                 className="trace-graph-flow"
+                nodeOrigin={[0.5, 0]}
+                defaultEdgeOptions={defaultEdgeOptions}
+                onNodeClick={(_, node) => focusNode(node.id)}
+                onNodeMouseEnter={(_, node) => setHoveredId(node.id)}
+                onNodeMouseLeave={() => setHoveredId(null)}
+                onPaneClick={() => { setFocusedId(null); setHoveredId(null); }}
                 proOptions={{ hideAttribution: true }}
             >
               <Background color={gridColor} gap={32} />
