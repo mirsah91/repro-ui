@@ -1,6 +1,6 @@
 // FunctionTraceViewer.jsx
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import ReactFlow, { Background, Controls, MiniMap, Handle, Position } from "reactflow";
+import ReactFlow, { Background, Controls, MiniMap, Handle, Position, MarkerType } from "reactflow";
 import "reactflow/dist/style.css";
 import "./FunctionTraceViewer.css";
 
@@ -240,48 +240,73 @@ function CallNode({ call, depth, compact, showFull }) {
 }
 
 /* =============================== Graph view ============================== */
-const LAYOUT = { columnWidth: 280, rowHeight: 180, nodeWidth: 240, nodeHeight: 130 };
+const LAYOUT = {
+  columnWidth: 320,
+  rowHeight: 160,
+  nodeWidth: 240,
+  nodeHeight: 130,
+  subtreeGapRows: 1.5
+};
 
 function buildGraphLayout(callRoots, { pack = true } = {}) {
   const allNodes = [];
   const allEdges = [];
-  for (const root of callRoots) {
-    let order = 0; // vertical order within this root follows encounter order
-    const assign = (node, depth, parentId) => {
-      const enter = node.enter || {};
-      const exit = node.exit || {};
-      const isEvent = Boolean(node.isEventOnly);
-      const isError = Boolean((node.exit || {})?.error || (node.exit || {})?.threw);
-      const name = enter.fn || exit.fn || (isEvent ? enter.type || "event" : "(anonymous)");
-      const duration = enter && exit ? fmtDur(enter.time, exit.time) : null;
-      const resultPreview = isEvent
-          ? formatValue(enter, { limit: 80 })
-          : exit?.threw
-              ? `throw ${formatValue(exit.error ?? exit.returnValue, { limit: 80 })}`
-              : "returnValue" in (exit || {})
-                  ? formatValue(exit.returnValue, { limit: 80 })
-                  : exit
-                      ? "void"
-                      : "…";
-      const argsPreview = isEvent ? null : formatArgsSignature(enter.args, 80);
-      const locationFile = enter.file || exit.file;
-      const locationLine = enter.line ?? exit.line;
-      const location = locationFile ? `${trimPath(locationFile)}${locationLine != null ? ":" + locationLine : ""}` : null;
+  let rowCursor = 0;
 
-      allNodes.push({
-        id: node.id,
-        type: "traceNode",
-        position: { x: depth * LAYOUT.columnWidth, y: order * LAYOUT.rowHeight },
-        data: { enter, exit, isEvent, isError, name, argsPreview, resultPreview, duration, location, ghost: !!node.ghost }
-      });
+  const placeNode = (node, depth, parentId) => {
+    const enter = node.enter || {};
+    const exit = node.exit || {};
+    const isEvent = Boolean(node.isEventOnly);
+    const isError = Boolean((node.exit || {})?.error || (node.exit || {})?.threw);
+    const name = enter.fn || exit.fn || (isEvent ? enter.type || "event" : "(anonymous)");
+    const duration = enter && exit ? fmtDur(enter.time, exit.time) : null;
+    const resultPreview = isEvent
+        ? formatValue(enter, { limit: 80 })
+        : exit?.threw
+            ? `throw ${formatValue(exit.error ?? exit.returnValue, { limit: 80 })}`
+            : "returnValue" in (exit || {})
+                ? formatValue(exit.returnValue, { limit: 80 })
+                : exit
+                    ? "void"
+                    : "…";
+    const argsPreview = isEvent ? null : formatArgsSignature(enter.args, 80);
+    const locationFile = enter.file || exit.file;
+    const locationLine = enter.line ?? exit.line;
+    const location = locationFile ? `${trimPath(locationFile)}${locationLine != null ? ":" + locationLine : ""}` : null;
 
-      const currentId = node.id;
-      order += 1;
+    const childCenters = [];
+    for (const child of node.children || []) {
+      childCenters.push(placeNode(child, depth + 1, node.id));
+    }
 
-      if (parentId) allEdges.push({ id: `${parentId}->${currentId}`, source: parentId, target: currentId, type: "smoothstep" });
-      for (const child of node.children || []) assign(child, depth + 1, currentId);
+    let centerY;
+    if (childCenters.length === 0) {
+      centerY = rowCursor * LAYOUT.rowHeight;
+      rowCursor += 1;
+    } else {
+      const minCenter = Math.min(...childCenters);
+      const maxCenter = Math.max(...childCenters);
+      centerY = (minCenter + maxCenter) / 2;
+    }
+
+    const nodeEntry = {
+      id: node.id,
+      type: "traceNode",
+      position: { x: depth * LAYOUT.columnWidth, y: centerY },
+      data: { enter, exit, isEvent, isError, name, argsPreview, resultPreview, duration, location, ghost: !!node.ghost }
     };
-    assign(root, 0, null);
+
+    allNodes.push(nodeEntry);
+    if (parentId) {
+      allEdges.push({ id: `${parentId}->${node.id}`, source: parentId, target: node.id });
+    }
+
+    return centerY;
+  };
+
+  for (const root of callRoots) {
+    placeNode(root, 0, null);
+    rowCursor += LAYOUT.subtreeGapRows;
   }
 
   // components by connectivity
@@ -313,10 +338,14 @@ function buildGraphLayout(callRoots, { pack = true } = {}) {
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const cn of compNodes) {
+      const width = cn.measured?.width ?? LAYOUT.nodeWidth;
+      const height = cn.measured?.height ?? LAYOUT.nodeHeight;
+      const top = cn.position.y - height / 2;
+      const bottom = top + height;
       minX = Math.min(minX, cn.position.x);
-      minY = Math.min(minY, cn.position.y);
-      maxX = Math.max(maxX, cn.position.x + (cn.measured?.width ?? LAYOUT.nodeWidth));
-      maxY = Math.max(maxY, cn.position.y + (cn.measured?.height ?? LAYOUT.nodeHeight));
+      minY = Math.min(minY, top);
+      maxX = Math.max(maxX, cn.position.x + width);
+      maxY = Math.max(maxY, bottom);
     }
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
@@ -453,8 +482,7 @@ function TraceGraphView({ graph }) {
         }))
     );
     const w = node?.measured?.width ?? 240;
-    const h = node?.measured?.height ?? 130;
-    instanceRef.current?.setCenter(node.position.x + w / 2, node.position.y + h / 2, { zoom: 1.1, duration: 450 });
+    instanceRef.current?.setCenter(node.position.x + w / 2, node.position.y, { zoom: 1.1, duration: 450 });
   }, [localNodes]);
 
   // Auto focus first component’s anchor
@@ -521,6 +549,14 @@ function TraceGraphView({ graph }) {
   const maskColor = isLight ? "rgba(255,255,255,0.86)" : "rgba(7, 9, 12, 0.86)";
   const miniMapNodeColor = (node) =>
       node.data?.isEvent ? (isLight ? "#6c79ff" : "#8f9eff") : (isLight ? "#2f77d1" : "#5ab0ff");
+  const edgeColor = isLight ? "rgba(59,130,246,0.75)" : "rgba(125,192,255,0.85)";
+  const defaultEdgeOptions = useMemo(() => ({
+    type: "step",
+    animated: true,
+    style: { stroke: edgeColor, strokeWidth: 2, strokeLinecap: "round" },
+    markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor, width: 18, height: 18 },
+    pathOptions: { borderRadius: 32 }
+  }), [edgeColor]);
 
   return (
       <div ref={wrapperRef} className="trace-graph-wrapper"
@@ -569,6 +605,8 @@ function TraceGraphView({ graph }) {
                 panOnDrag
                 panOnScroll
                 className="trace-graph-flow"
+                nodeOrigin={[0, 0.5]}
+                defaultEdgeOptions={defaultEdgeOptions}
                 proOptions={{ hideAttribution: true }}
             >
               <Background color={gridColor} gap={32} />
