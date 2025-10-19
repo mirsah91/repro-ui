@@ -1007,7 +1007,7 @@ export default function SessionReplay({ sessionId }) {
     );
 
     const timelinePanel = (
-        <aside className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden border-t border-slate-200 bg-white lg:border-l lg:border-t-0">
+        <aside className="flex h-full min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden border-t border-slate-200 bg-white lg:border-l lg:border-t-0">
             <div className="border-b border-slate-200 px-6 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
@@ -1284,11 +1284,11 @@ export default function SessionReplay({ sessionId }) {
             </header>
             <main className="flex flex-1 min-h-0 min-w-0 flex-col overflow-x-hidden">
                 {viewMode === "replay" ? (
-                    <div className="flex flex-1 min-h-0 flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_26rem] xl:grid-cols-[minmax(0,1fr)_30rem]">
+                    <div className="flex flex-1 min-h-0 flex-col lg:flex-row">
                         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                             {playbackSection}
                         </div>
-                        <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-none">
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:w-[26rem] lg:flex-none lg:shrink-0 xl:w-[30rem]">
                             {timelinePanel}
                         </div>
                     </div>
