@@ -26,6 +26,7 @@ body {
 * {
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.6) rgba(226, 232, 240, 0.6);
+  border-radius: 0 !important;
 }
 
 *::-webkit-scrollbar {
@@ -35,12 +36,10 @@ body {
 
 *::-webkit-scrollbar-track {
   background: rgba(226, 232, 240, 0.6);
-  border-radius: 999px;
 }
 
 *::-webkit-scrollbar-thumb {
   background: rgba(148, 163, 184, 0.7);
-  border-radius: 999px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
