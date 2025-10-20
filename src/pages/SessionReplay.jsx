@@ -681,7 +681,9 @@ export default function SessionReplay({ sessionId }) {
             serverToRrwebOffsetMs(serverMs);
         if (rrMs == null) return null;
         const total = getTotalDuration();
-        return Math.max(0, Math.min(total || 0, rrMs));
+        const hasTotal = Number.isFinite(total) && total > 0;
+        const normalized = Math.max(0, rrMs);
+        return hasTotal ? Math.min(total, normalized) : normalized;
     }
 
     function jumpToEvent(ev) {
