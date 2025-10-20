@@ -603,16 +603,36 @@ export default function SessionReplay({ sessionId }) {
             lastPausedTimeRef.current = clamped;
             setCurrentTime(clamped);
 
-            if (!rep) return;
+            if (!rep) {
+                setPlayerStatus(autoPlay ? "playing" : "paused");
+                return;
+            }
 
             try {
-                rep.pause();
-                rep.play(clamped);
-                if (!autoPlay) {
-                    rep.pause();
-                    setPlayerStatus("paused");
+                const hasGoto = typeof rep.goto === "function";
+                if (hasGoto) {
+                    rep.goto(clamped);
                 } else {
+                    rep.pause();
+                    rep.play(clamped);
+                }
+
+                if (autoPlay) {
+                    if (hasGoto) {
+                        rep.play(clamped);
+                    }
                     setPlayerStatus("playing");
+                } else {
+                    if (typeof rep.pause === "function") {
+                        try {
+                            rep.pause(clamped);
+                        } catch (err) {
+                            rep.pause();
+                        }
+                    } else {
+                        rep.pause?.();
+                    }
+                    setPlayerStatus("paused");
                 }
             } catch (err) {
                 warn("seek failed", err);
@@ -1010,7 +1030,7 @@ export default function SessionReplay({ sessionId }) {
                                     <button
                                         key={marker.key || marker.position}
                                         type="button"
-                                        className={`pointer-events-auto absolute top-1/2 flex h-10 w-10 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border-2 border-white/80 text-white shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "ring-4 ring-sky-300 ring-offset-2 ring-offset-white scale-105" : "hover:scale-105"}`}
+                                        className={`pointer-events-auto absolute top-1/2 flex h-10 w-10 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border-2 border-white/80 text-white shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white overflow-hidden ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "ring-4 ring-sky-300 ring-offset-2 ring-offset-white scale-105" : "hover:scale-105"}`}
                                         style={{ left: `${marker.position * 100}%` }}
                                         onClick={() => jumpToEvent(event)}
                                         onMouseEnter={() => setHoveredMarker(marker)}
@@ -1057,7 +1077,7 @@ export default function SessionReplay({ sessionId }) {
                                 style={{ left: `${x}%`, bottom: "calc(50% + 24px)" }}
                             >
                                 <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.25em] text-slate-500">
-                                    <span className={`h-2 w-2 ${KIND_COLORS[event.kind] || "bg-slate-500"}`} />
+                                                        <span className={`h-2 w-2 rounded-full ${KIND_COLORS[event.kind] || "bg-slate-500"}`} />
                                     {event.kind}
                                 </div>
                                 <div className="mt-1 break-words text-sm font-medium leading-snug text-slate-900">{getMarkerTitle(event)}</div>
@@ -1111,7 +1131,10 @@ export default function SessionReplay({ sessionId }) {
                         const windowLabel = action ? `${formatMaybeTime(startAligned)} → ${formatMaybeTime(endAligned)}` : null;
 
                         return (
-                            <div key={groupKey} className="w-full border border-slate-800 bg-slate-900/80 text-slate-100">
+                            <div
+                                key={groupKey}
+                                className="w-full overflow-hidden rounded-lg border border-slate-300 bg-slate-100/90 text-slate-900 shadow-sm"
+                            >
                                 <button
                                     type="button"
                                     onClick={() =>
@@ -1122,20 +1145,20 @@ export default function SessionReplay({ sessionId }) {
                                         })
                                     }
                                     aria-expanded={!isCollapsed}
-                                    className="flex w-full items-start justify-between gap-3 border-b border-slate-800 bg-slate-900/90 px-4 py-3 text-left transition hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                                    className="flex w-full items-start justify-between gap-3 border-b border-slate-300 bg-slate-200/80 px-4 py-3 text-left transition hover:bg-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500"
                                 >
                                     <div className="space-y-1">
-                                        <div className="text-sm font-semibold text-white">{title}</div>
-                                        <div className="flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.25em] text-slate-300">
+                                        <div className="text-sm font-semibold text-slate-900">{title}</div>
+                                        <div className="flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.25em] text-slate-500">
                                             <span>{g.items.length} events</span>
                                             {windowLabel && <span>{windowLabel}</span>}
                                         </div>
                                     </div>
-                                    <span className="text-slate-300">{isCollapsed ? "▸" : "▾"}</span>
+                                    <span className="text-slate-500">{isCollapsed ? "▸" : "▾"}</span>
                                 </button>
 
                                 {!isCollapsed && (
-                                    <div className="divide-y divide-slate-800/70">
+                                    <div className="divide-y divide-slate-200">
                                         {g.items.map((e, ei) => {
                                             const isEventActive = activeEventId && e.__key === activeEventId;
                                             const eventKey = `${groupKey}-${ei}`;
@@ -1150,73 +1173,79 @@ export default function SessionReplay({ sessionId }) {
                                                     key={eventKey}
                                                     type="button"
                                                     onClick={() => jumpToEvent(e)}
-                                                    className={`group flex w-full flex-col gap-3 rounded-lg px-4 py-3 text-left transition text-slate-100 ${
-                                                        isEventActive
-                                                            ? "bg-slate-800/90 shadow-inner ring-2 ring-sky-500"
-                                                            : "bg-slate-900/80 hover:bg-slate-900"
-                                                    }`}
-                                                >
-                                                    <div className="flex items-start justify-between gap-4">
-                                                        <div className="flex min-w-0 items-start gap-3">
-                                                            <span className={`h-2 w-2 ${KIND_COLORS[e.kind] || "bg-slate-500"}`} />
-                                                            <div className="min-w-0">
-                                                                <div className="break-words text-sm font-semibold text-white">{getMarkerTitle(e)}</div>
-                                                                <div className="mt-1 text-[11px] uppercase tracking-[0.28em] text-slate-300">{e.kind}</div>
+                                                className={`group flex w-full flex-col gap-3 rounded-lg px-4 py-3 text-left transition text-slate-900 ${
+                                                    isEventActive
+                                                        ? "bg-white shadow-inner ring-2 ring-sky-400"
+                                                        : "bg-slate-100 hover:bg-slate-50"
+                                                }`}
+                                            >
+                                                <div className="flex items-start justify-between gap-4">
+                                                    <div className="flex min-w-0 items-start gap-3">
+                                                        <span className={`h-2 w-2 rounded-full ${KIND_COLORS[e.kind] || "bg-slate-500"}`} />
+                                                        <div className="min-w-0">
+                                                            <div className="break-words text-sm font-semibold text-slate-900">
+                                                                {getMarkerTitle(e)}
                                                             </div>
-                                                        </div>
-                                                        <div className="text-right text-xs text-slate-200">
-                                                            <div>{formatMaybeTime(alignedSeekMsFor(e))}</div>
-                                                            {typeof e._t === "number" && <div className="font-mono text-[11px] text-slate-400">@{e._t}</div>}
+                                                            <div className="mt-1 text-[11px] uppercase tracking-[0.28em] text-slate-500">
+                                                                {e.kind}
+                                                            </div>
                                                         </div>
                                                     </div>
+                                                    <div className="text-right text-xs text-slate-600">
+                                                        <div>{formatMaybeTime(alignedSeekMsFor(e))}</div>
+                                                        {typeof e._t === "number" && (
+                                                            <div className="font-mono text-[11px] text-slate-400">@{e._t}</div>
+                                                        )}
+                                                    </div>
+                                                </div>
 
-                                                    {isRequest && (
-                                                        <div className="space-y-2 text-xs text-slate-200">
-                                                            <div className="break-words font-mono text-sm text-white">
-                                                                {e.meta?.method} {e.meta?.url}
-                                                            </div>
-                                                            <div className="flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.28em] text-slate-300">
-                                                                {e.meta?.status != null && <span>Status {e.meta.status}</span>}
-                                                                {e.meta?.durMs != null && <span>{e.meta.durMs}ms</span>}
-                                                                {typeof e.meta?.size === "number" && <span>{e.meta.size} bytes</span>}
-                                                            </div>
-                                                            {e.meta?.body && (
-                                                                <pre className="max-h-40 max-w-full overflow-auto border border-slate-700 bg-slate-900/60 p-3 text-[11px] leading-relaxed text-slate-200">
-                                                                    {JSON.stringify(e.meta.body, null, 2)}
-                                                                </pre>
-                                                            )}
-                                                            {e.meta?.response && (
-                                                                <pre className="max-h-40 max-w-full overflow-auto border border-slate-700 bg-slate-900/60 p-3 text-[11px] leading-relaxed text-slate-200">
-                                                                    {JSON.stringify(e.meta.response, null, 2)}
-                                                                </pre>
-                                                            )}
+                                                {isRequest && (
+                                                    <div className="space-y-2 text-xs text-slate-700">
+                                                        <div className="break-words font-mono text-sm text-slate-900">
+                                                            {e.meta?.method} {e.meta?.url}
                                                         </div>
-                                                    )}
+                                                        <div className="flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.28em] text-slate-500">
+                                                            {e.meta?.status != null && <span>Status {e.meta.status}</span>}
+                                                            {e.meta?.durMs != null && <span>{e.meta.durMs}ms</span>}
+                                                            {typeof e.meta?.size === "number" && <span>{e.meta.size} bytes</span>}
+                                                        </div>
+                                                        {e.meta?.body && (
+                                                            <pre className="max-h-40 max-w-full overflow-auto rounded border border-slate-300 bg-white p-3 text-[11px] leading-relaxed text-slate-700">
+                                                                {JSON.stringify(e.meta.body, null, 2)}
+                                                            </pre>
+                                                        )}
+                                                        {e.meta?.response && (
+                                                            <pre className="max-h-40 max-w-full overflow-auto rounded border border-slate-300 bg-white p-3 text-[11px] leading-relaxed text-slate-700">
+                                                                {JSON.stringify(e.meta.response, null, 2)}
+                                                            </pre>
+                                                        )}
+                                                    </div>
+                                                )}
                                                     {isDb && (
-                                                        <div className="space-y-2 text-xs text-slate-200">
-                                                            <div className="break-words font-mono text-sm text-white">
+                                                        <div className="space-y-2 text-xs text-slate-700">
+                                                            <div className="break-words font-mono text-sm text-slate-900">
                                                                 {e.meta?.collection} • {e.meta?.op}
                                                             </div>
                                                             {e.meta?.query && (
-                                                                <pre className="max-h-36 max-w-full overflow-auto border border-slate-700 bg-slate-900/60 p-3 text-[11px] leading-relaxed text-slate-200">
+                                                                <pre className="max-h-36 max-w-full overflow-auto rounded border border-slate-300 bg-white p-3 text-[11px] leading-relaxed text-slate-700">
                                                                     {JSON.stringify(e.meta.query, null, 2)}
                                                                 </pre>
                                                             )}
                                                             {e.meta?.resultMeta && (
-                                                                <div className="text-[11px] text-slate-300">result {JSON.stringify(e.meta.resultMeta)}</div>
+                                                                <div className="text-[11px] text-slate-500">result {JSON.stringify(e.meta.resultMeta)}</div>
                                                             )}
                                                         </div>
                                                     )}
                                                     {isAction && (
-                                                        <div className="space-y-1 text-xs text-slate-200">
-                                                            <div className="break-words font-mono text-sm text-white">{e.label || e.actionId}</div>
+                                                        <div className="space-y-1 text-xs text-slate-700">
+                                                            <div className="break-words font-mono text-sm text-slate-900">{e.label || e.actionId}</div>
                                                             {(typeof e.tStart === "number" || typeof e.tEnd === "number") && (
-                                                                <div className="text-[11px] text-slate-300">[{e.tStart ?? "—"} … {e.tEnd ?? "—"}]</div>
+                                                                <div className="text-[11px] text-slate-500">[{e.tStart ?? "—"} … {e.tEnd ?? "—"}]</div>
                                                             )}
                                                         </div>
                                                     )}
                                                     {isEmail && (
-                                                        <div className="text-xs text-slate-200">
+                                                        <div className="text-xs text-slate-700">
                                                             <EmailItem meta={e.meta} />
                                                         </div>
                                                     )}
