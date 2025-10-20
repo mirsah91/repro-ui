@@ -357,9 +357,6 @@ export default function SessionReplay({ sessionId }) {
         return Number.isFinite(virtual) ? Math.max(0, virtual) : null;
     }, []);
 
-    const toRrwebTime = (serverMs) =>
-        typeof serverMs === "number" ? serverMs - (clockOffsetRef.current || 0) : null;
-
     // ---- normalize ticks ----
     const ticks = useMemo(() => {
         const zero = rrwebZeroTsRef.current;
@@ -541,7 +538,11 @@ export default function SessionReplay({ sessionId }) {
 
         return () => {
             cancelled = true;
-            try { replayerRef.current?.pause(); } catch {}
+            try {
+                replayerRef.current?.pause();
+            } catch (err) {
+                warn("pause during cleanup failed", err);
+            }
             replayerRef.current = null;
             if (mo) mo.disconnect();
             if (viewportProbe) clearInterval(viewportProbe);
@@ -583,9 +584,6 @@ export default function SessionReplay({ sessionId }) {
         return () => observer.disconnect();
     }, [applyFitContain]);
 
-    const isPlaying = playerStatus === "playing";
-    const canPlay = playerStatus !== "playing" && playerStatus !== "error" && playerStatus !== "loading";
-
     const timelineMarkers = useMemo(() => {
         const total = playerMeta.totalTime || 0;
         if (!total) return [];
@@ -613,11 +611,20 @@ export default function SessionReplay({ sessionId }) {
     }, [timelineMarkers]);
 
     function alignedSeekMsFor(ev) {
+        const aligned =
+            (typeof ev._alignedStart === "number" && ev._alignedStart) ??
+            (typeof ev._alignedEnd === "number" && ev._alignedEnd) ??
+            null;
+
         const serverMs =
             (typeof ev._startServer === "number" && ev._startServer) ??
             (typeof ev._endServer === "number" && ev._endServer) ??
-            (typeof ev._t === "number" && ev._t) ?? null;
-        const rrMs = serverToRrwebOffsetMs(serverMs);
+            (typeof ev._t === "number" && ev._t) ??
+            null;
+
+        const rrMs =
+            aligned ??
+            serverToRrwebOffsetMs(serverMs);
         if (rrMs == null) return null;
         const total = replayerRef.current?.getMetaData?.().totalTime ?? 0;
         return Math.max(0, Math.min(total || 0, rrMs));
@@ -627,6 +634,19 @@ export default function SessionReplay({ sessionId }) {
         (ev) => {
             if (!ev || !traceEntries.length) return null;
             const meta = ev.meta || {};
+            const eventHints = [
+                ev.actionId,
+                ev.id,
+                ev.ui?.traceHint,
+                ev.ui?.traceId,
+                ev.ui?.trace_id,
+                ev.ui?.requestRid,
+                ev.ui?.rid,
+                ev.ui?.groupKey,
+                ev.ui?.key,
+                ev.label,
+            ].filter(Boolean);
+
             const traceHints = [
                 meta.traceId,
                 meta.trace_id,
@@ -634,16 +654,30 @@ export default function SessionReplay({ sessionId }) {
                 meta.requestRid,
                 meta.rid,
                 meta.id,
+                meta.traceHint,
             ].filter(Boolean);
 
-            for (const hint of traceHints) {
+            const allHints = [...traceHints, ...eventHints];
+
+            const matchesHint = (entry, hint) => {
+                if (!hint) return false;
+                const req = entry.request || {};
+                return (
+                    entry.id === hint ||
+                    entry.groupKey === hint ||
+                    entry.requestRid === hint ||
+                    entry.label === hint ||
+                    req.traceId === hint ||
+                    req.requestRid === hint ||
+                    req.rid === hint ||
+                    req.key === hint ||
+                    req.actionId === hint
+                );
+            };
+
+            for (const hint of allHints) {
                 const direct = traceEntries.find(
-                    (entry) =>
-                        entry.id === hint ||
-                        entry.requestRid === hint ||
-                        entry.request?.traceId === hint ||
-                        entry.request?.requestRid === hint ||
-                        entry.request?.rid === hint
+                    (entry) => matchesHint(entry, hint)
                 );
                 if (direct) return direct;
             }
@@ -670,23 +704,36 @@ export default function SessionReplay({ sessionId }) {
                 if (match) return match;
             }
 
+            if (ev.actionId) {
+                const actionMatch = traceEntries.find((entry) => {
+                    const req = entry.request || {};
+                    return entry.groupKey === ev.actionId || req.actionId === ev.actionId;
+                });
+                if (actionMatch) return actionMatch;
+            }
+
             return null;
         },
         [traceEntries]
     );
 
     function jumpToEvent(ev) {
-        const rep = replayerRef.current;
-        if (!rep) return;
         const target = alignedSeekMsFor(ev);
         if (target == null) return;
-        try {
-            rep.pause();
-            lastPausedTimeRef.current = target;
-            rep.play(target);
-            setPlayerStatus("playing");
-            setCurrentTime(target);
-        } catch (e) { warn("seek failed", e); }
+        const rep = replayerRef.current;
+
+        lastPausedTimeRef.current = target;
+        setCurrentTime(target);
+
+        if (rep) {
+            try {
+                rep.pause();
+                rep.play(target);
+                setPlayerStatus("playing");
+            } catch (e) {
+                warn("seek failed", e);
+            }
+        }
         const key = ev.__key;
         if (key) {
             setActiveEventId(key);
@@ -696,7 +743,7 @@ export default function SessionReplay({ sessionId }) {
             });
         }
 
-        if (ev.kind === "request") {
+        if (ev.kind === "request" || ev.kind === "action") {
             const matchedTrace = findTraceForEvent(ev);
             if (matchedTrace) {
                 setSelectedTraceId(matchedTrace.id);
@@ -759,8 +806,6 @@ export default function SessionReplay({ sessionId }) {
         return `${minutes}:${seconds.toString().padStart(2, "0")}`;
     };
     const formatMaybeTime = (ms) => (ms == null ? "—" : formatTime(ms));
-
-    const hoverPosition = hoveredMarker ? Math.min(92, Math.max(8, hoveredMarker.position * 100)) : 0;
 
     const KIND_COLORS = {
         action: "bg-amber-500",

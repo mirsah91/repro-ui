@@ -249,11 +249,11 @@ function CallNode({ call, depth, compact, showFull }) {
 
 /* =============================== Graph view ============================== */
 const LAYOUT = {
-  columnWidth: 280,
-  rowHeight: 220,
+  columnWidth: 320,
+  rowHeight: 250,
   nodeWidth: 260,
   nodeHeight: 150,
-  subtreeGapCols: 1.25
+  subtreeGapCols: 1.5
 };
 
 const PRIMARY_ACCENT = "#2563eb";
@@ -548,7 +548,6 @@ function TraceGraphView({ graph }) {
     if (!node) return;
     setFocusedId(id);
     setHoveredId(null);
-    const width = node?.measured?.width ?? LAYOUT.nodeWidth;
     const height = node?.measured?.height ?? LAYOUT.nodeHeight;
     instanceRef.current?.setCenter(node.position.x, node.position.y + height / 2, { zoom: 1.08, duration: 480 });
   }, [setHoveredId, setFocusedId]);
