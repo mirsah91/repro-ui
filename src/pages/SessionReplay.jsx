@@ -1042,13 +1042,23 @@ export default function SessionReplay({ sessionId }) {
                                         key={marker.key || marker.position}
                                         type="button"
                                         className={`pointer-events-auto absolute top-1/2 flex aspect-square h-10 w-10 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border-2 border-white/80 text-white shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white overflow-hidden ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "ring-4 ring-sky-300 ring-offset-2 ring-offset-white scale-105" : "hover:scale-105"}`}
-                                        style={{ left: `${marker.position * 100}%` }}
+                                        style={{ left: `${marker.position * 100}%`, borderRadius: "9999px" }}
                                         onClick={() => jumpToEvent(event)}
                                         onMouseEnter={() => setHoveredMarker(marker)}
                                         onMouseLeave={() => setHoveredMarker(null)}
                                         onFocus={() => setHoveredMarker(marker)}
                                         onBlur={() => setHoveredMarker(null)}
                                         title={`${event.kind || "event"} • ${markerTitle}${eventTime != null ? ` • ${formatMaybeTime(eventTime)}` : ""}`}
+                                        onPointerDown={(ev) => {
+                                            ev.stopPropagation();
+                                        }}
+                                        onMouseDown={(ev) => {
+                                            ev.stopPropagation();
+                                        }}
+                                        onTouchStart={(ev) => {
+                                            ev.stopPropagation();
+                                        }}
+                                        data-timeline-marker
                                     >
                                         <MarkerIcon kind={event.kind} className="text-white" />
                                     </button>
@@ -1144,7 +1154,7 @@ export default function SessionReplay({ sessionId }) {
                         return (
                             <div
                                 key={groupKey}
-                                className="w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-50/90 text-slate-900 shadow-sm"
+                                className="w-full overflow-hidden rounded-lg border border-slate-300 bg-slate-200/80 text-slate-900 shadow-md"
                             >
                                 <button
                                     type="button"
@@ -1156,7 +1166,7 @@ export default function SessionReplay({ sessionId }) {
                                         })
                                     }
                                     aria-expanded={!isCollapsed}
-                                    className="flex w-full items-start justify-between gap-3 border-b border-slate-200 bg-slate-100/80 px-4 py-3 text-left transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                                    className="flex w-full items-start justify-between gap-3 border-b border-slate-300 bg-slate-300/70 px-4 py-3 text-left transition hover:bg-slate-200/80 focus:outline-none focus:ring-2 focus:ring-sky-500"
                                 >
                                     <div className="space-y-1">
                                         <div className="text-sm font-semibold text-slate-900">{title}</div>
@@ -1184,12 +1194,12 @@ export default function SessionReplay({ sessionId }) {
                                                     key={eventKey}
                                                     type="button"
                                                     onClick={() => jumpToEvent(e)}
-                                                className={`group flex w-full flex-col gap-3 rounded-lg px-4 py-3 text-left transition text-slate-900 ${
-                                                    isEventActive
-                                                        ? "bg-white shadow-inner ring-2 ring-sky-400"
-                                                        : "bg-slate-50 hover:bg-white"
-                                                }`}
-                                            >
+                                                    className={`group flex w-full flex-col gap-3 rounded-lg px-4 py-3 text-left transition text-slate-900 ${
+                                                        isEventActive
+                                                            ? "bg-white ring-2 ring-sky-500 ring-offset-2 ring-offset-slate-200 shadow-md"
+                                                            : "bg-slate-200/70 hover:bg-slate-100"
+                                                    }`}
+                                                >
                                                 <div className="flex items-start justify-between gap-4">
                                                     <div className="flex min-w-0 items-start gap-3">
                                                         <span className={`h-2 w-2 rounded-full ${KIND_COLORS[e.kind] || "bg-slate-500"}`} />
