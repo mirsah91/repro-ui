@@ -598,7 +598,11 @@ export default function SessionReplay({ sessionId }) {
         (ms, { autoPlay = false } = {}) => {
             const rep = replayerRef.current;
             const total = getTotalDuration();
-            const clamped = Math.max(0, Math.min(total || 0, Number.isFinite(ms) ? ms : 0));
+            const requested = Number.isFinite(ms) ? ms : 0;
+            const hasTotal = Number.isFinite(total) && total > 0;
+            const clamped = hasTotal
+                ? Math.max(0, Math.min(total, requested))
+                : Math.max(0, requested);
 
             lastPausedTimeRef.current = clamped;
             setCurrentTime(clamped);
