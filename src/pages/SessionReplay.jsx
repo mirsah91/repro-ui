@@ -1037,27 +1037,38 @@ export default function SessionReplay({ sessionId }) {
                                 const isActive = activeEventId && event.__key === activeEventId;
                                 const eventTime = alignedSeekMsFor(event);
                                 const markerTitle = getMarkerTitle(event);
+
+                                const activateMarker = (ev) => {
+                                    if (ev) {
+                                        if (typeof ev.button === "number" && ev.button !== 0) return;
+                                        ev.preventDefault?.();
+                                        ev.stopPropagation?.();
+                                    }
+                                    jumpToEvent(event);
+                                };
+
                                 return (
                                     <button
                                         key={marker.key || marker.position}
                                         type="button"
-                                        className={`pointer-events-auto absolute top-1/2 flex aspect-square h-10 w-10 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border-2 border-white/80 text-white shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white overflow-hidden ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "ring-4 ring-sky-300 ring-offset-2 ring-offset-white scale-105" : "hover:scale-105"}`}
-                                        style={{ left: `${marker.position * 100}%`, borderRadius: "9999px" }}
-                                        onClick={() => jumpToEvent(event)}
+                                        className={`pointer-events-auto absolute top-1/2 flex h-10 w-10 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border-2 border-white/80 text-white shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white overflow-hidden ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "ring-4 ring-sky-300 ring-offset-2 ring-offset-white scale-105" : "hover:scale-105"}`}
+                                        style={{
+                                            left: `${marker.position * 100}%`,
+                                            borderRadius: "9999px",
+                                            clipPath: "circle(50%)",
+                                        }}
+                                        onPointerDown={activateMarker}
+                                        onClick={activateMarker}
+                                        onKeyDown={(ev) => {
+                                            if (ev.key === "Enter" || ev.key === " ") {
+                                                activateMarker(ev);
+                                            }
+                                        }}
                                         onMouseEnter={() => setHoveredMarker(marker)}
                                         onMouseLeave={() => setHoveredMarker(null)}
                                         onFocus={() => setHoveredMarker(marker)}
                                         onBlur={() => setHoveredMarker(null)}
                                         title={`${event.kind || "event"} • ${markerTitle}${eventTime != null ? ` • ${formatMaybeTime(eventTime)}` : ""}`}
-                                        onPointerDown={(ev) => {
-                                            ev.stopPropagation();
-                                        }}
-                                        onMouseDown={(ev) => {
-                                            ev.stopPropagation();
-                                        }}
-                                        onTouchStart={(ev) => {
-                                            ev.stopPropagation();
-                                        }}
                                         data-timeline-marker
                                     >
                                         <MarkerIcon kind={event.kind} className="text-white" />
