@@ -249,11 +249,11 @@ function CallNode({ call, depth, compact, showFull }) {
 
 /* =============================== Graph view ============================== */
 const LAYOUT = {
-  columnWidth: 320,
-  rowHeight: 250,
+  columnWidth: 360,
+  rowHeight: 220,
   nodeWidth: 260,
   nodeHeight: 150,
-  subtreeGapCols: 1.5
+  subtreeGapRows: 1.5
 };
 
 const PRIMARY_ACCENT = "#2563eb";
@@ -265,7 +265,7 @@ const depthStyle = () => ({ accent: PRIMARY_ACCENT, surface: PRIMARY_SURFACE });
 function buildGraphLayout(callRoots, { pack = true } = {}) {
   const allNodes = [];
   const allEdges = [];
-  let colCursor = 0;
+  let rowCursor = 0;
 
   const placeNode = (node, depth, parentId, lineage) => {
     const enter = node.enter || {};
@@ -295,14 +295,14 @@ function buildGraphLayout(callRoots, { pack = true } = {}) {
       childCenters.push(placeNode(child, depth + 1, node.id, [...lineage, node.id]));
     }
 
-    let centerX;
+    let centerY;
     if (childCenters.length === 0) {
-      centerX = colCursor * LAYOUT.columnWidth;
-      colCursor += 1;
+      centerY = rowCursor * LAYOUT.rowHeight;
+      rowCursor += 1;
     } else {
       const minCenter = Math.min(...childCenters);
       const maxCenter = Math.max(...childCenters);
-      centerX = (minCenter + maxCenter) / 2;
+      centerY = (minCenter + maxCenter) / 2;
     }
 
     const depthStyles = isEvent ? { accent: PRIMARY_ACCENT, surface: EVENT_SURFACE } : depthStyle(depth);
@@ -310,7 +310,7 @@ function buildGraphLayout(callRoots, { pack = true } = {}) {
     const nodeEntry = {
       id: node.id,
       type: "traceNode",
-      position: { x: centerX, y: depth * LAYOUT.rowHeight },
+      position: { x: depth * LAYOUT.columnWidth, y: centerY },
       data: {
         enter,
         exit,
@@ -351,12 +351,12 @@ function buildGraphLayout(callRoots, { pack = true } = {}) {
       });
     }
 
-    return centerX;
+    return centerY;
   };
 
   for (const root of callRoots) {
     placeNode(root, 0, null, []);
-    colCursor += LAYOUT.subtreeGapCols;
+    rowCursor += LAYOUT.subtreeGapRows;
   }
 
   // components by connectivity
@@ -390,11 +390,10 @@ function buildGraphLayout(callRoots, { pack = true } = {}) {
     for (const cn of compNodes) {
       const width = cn.measured?.width ?? LAYOUT.nodeWidth;
       const height = cn.measured?.height ?? LAYOUT.nodeHeight;
-      const half = width / 2;
-      const left = cn.position.x - half;
-      const right = cn.position.x + half;
-      const top = cn.position.y;
-      const bottom = top + height;
+      const left = cn.position.x;
+      const right = left + width;
+      const top = cn.position.y - height / 2;
+      const bottom = cn.position.y + height / 2;
       minX = Math.min(minX, left);
       minY = Math.min(minY, top);
       maxX = Math.max(maxX, right);
@@ -447,7 +446,7 @@ function TraceFlowNodeView({ data }) {
 
   return (
       <div className={`graph-node-card${isError ? " is-error" : ""}${isEvent ? " is-event" : ""}${ghost ? " is-ghost" : ""}`} data-depth={depth}>
-        <Handle type="target" position={Position.Top} id="in" style={{ top: -10 }} />
+        <Handle type="target" position={Position.Left} id="in" style={{ left: -12 }} />
         <div className="graph-node-head">
           <div className="graph-node-title">
             {!isEvent && <span className="keyword">function</span>}
@@ -468,7 +467,7 @@ function TraceFlowNodeView({ data }) {
             {ghost && <span className="ghost-pill">collapsed</span>}
           </div>
         </div>
-        <Handle type="source" position={Position.Bottom} id="out" style={{ bottom: -10 }} />
+        <Handle type="source" position={Position.Right} id="out" style={{ right: -12 }} />
       </div>
   );
 }
@@ -731,7 +730,7 @@ function TraceGraphView({ graph }) {
                 panOnDrag
                 panOnScroll
                 className="trace-graph-flow"
-                nodeOrigin={[0.5, 0]}
+                nodeOrigin={[0, 0.5]}
                 defaultEdgeOptions={defaultEdgeOptions}
                 onNodeClick={(_, node) => focusNode(node.id)}
                 onNodeMouseEnter={(_, node) => setHoveredId(node.id)}

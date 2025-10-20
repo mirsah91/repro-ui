@@ -157,6 +157,8 @@ function absInWindow(abs, start, end, win) {
 export default function SessionReplay({ sessionId }) {
     const containerRef = useRef(null);
     const replayerRef = useRef(null);
+    const progressTrackRef = useRef(null);
+    const scrubCleanupRef = useRef(null);
     const rrwebZeroTsRef = useRef(null);
     const lastPausedTimeRef = useRef(0);
     const lastPlayerSizeRef = useRef({ width: 0, height: 0 });
@@ -584,9 +586,44 @@ export default function SessionReplay({ sessionId }) {
         return () => observer.disconnect();
     }, [applyFitContain]);
 
+    const getTotalDuration = React.useCallback(() => {
+        const metaTotal = replayerRef.current?.getMetaData?.().totalTime;
+        if (Number.isFinite(metaTotal) && metaTotal > 0) return metaTotal;
+        return playerMeta.totalTime || 0;
+    }, [playerMeta.totalTime]);
+
+    const seekToTime = React.useCallback(
+        (ms, { autoPlay = true } = {}) => {
+            const rep = replayerRef.current;
+            const total = getTotalDuration();
+            const clamped = Math.max(0, Math.min(total || 0, Number.isFinite(ms) ? ms : 0));
+
+            lastPausedTimeRef.current = clamped;
+            setCurrentTime(clamped);
+
+            if (!rep) return;
+
+            try {
+                rep.pause();
+                rep.play(clamped);
+                if (!autoPlay) {
+                    rep.pause();
+                    setPlayerStatus("paused");
+                } else {
+                    setPlayerStatus("playing");
+                }
+            } catch (err) {
+                warn("seek failed", err);
+            }
+        },
+        [getTotalDuration]
+    );
+
+    const totalDuration = getTotalDuration();
+    const progressPercent = totalDuration ? Math.min(100, (currentTime / totalDuration) * 100) : 0;
+
     const timelineMarkers = useMemo(() => {
-        const total = playerMeta.totalTime || 0;
-        if (!total) return [];
+        if (!totalDuration) return [];
         const markers = [];
         for (const ev of ticks) {
             const aligned =
@@ -594,11 +631,11 @@ export default function SessionReplay({ sessionId }) {
                     typeof ev._alignedEnd === "number" ? ev._alignedEnd :
                         serverToRrwebOffsetMs(ev._t);
             if (typeof aligned !== "number" || !Number.isFinite(aligned)) continue;
-            const position = Math.max(0, Math.min(1, aligned / total));
+            const position = Math.max(0, Math.min(1, aligned / totalDuration));
             markers.push({ key: ev.__key, event: ev, position });
         }
         return markers;
-    }, [ticks, playerMeta.totalTime, serverToRrwebOffsetMs]);
+    }, [ticks, totalDuration, serverToRrwebOffsetMs]);
 
     useEffect(() => {
         setHoveredMarker((prev) => {
@@ -626,7 +663,7 @@ export default function SessionReplay({ sessionId }) {
             aligned ??
             serverToRrwebOffsetMs(serverMs);
         if (rrMs == null) return null;
-        const total = replayerRef.current?.getMetaData?.().totalTime ?? 0;
+        const total = getTotalDuration();
         return Math.max(0, Math.min(total || 0, rrMs));
     }
 
@@ -720,20 +757,8 @@ export default function SessionReplay({ sessionId }) {
     function jumpToEvent(ev) {
         const target = alignedSeekMsFor(ev);
         if (target == null) return;
-        const rep = replayerRef.current;
 
-        lastPausedTimeRef.current = target;
-        setCurrentTime(target);
-
-        if (rep) {
-            try {
-                rep.pause();
-                rep.play(target);
-                setPlayerStatus("playing");
-            } catch (e) {
-                warn("seek failed", e);
-            }
-        }
+        seekToTime(target);
         const key = ev.__key;
         if (key) {
             setActiveEventId(key);
@@ -748,9 +773,85 @@ export default function SessionReplay({ sessionId }) {
             if (matchedTrace) {
                 setSelectedTraceId(matchedTrace.id);
                 setViewMode("trace");
+            } else if (traceEntries.length) {
+                setViewMode("trace");
+                setSelectedTraceId((prev) => prev ?? traceEntries[0].id);
             }
         }
     }
+
+    const handleProgressSeek = React.useCallback(
+        (clientX) => {
+            const track = progressTrackRef.current;
+            if (!track) return;
+            const rect = track.getBoundingClientRect();
+            if (!rect || rect.width <= 0) return;
+            const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+            const total = getTotalDuration();
+            const nextTime = ratio * (total || 0);
+            seekToTime(nextTime);
+        },
+        [getTotalDuration, seekToTime]
+    );
+
+    const startProgressScrub = React.useCallback(
+        (clientX) => {
+            if (scrubCleanupRef.current) {
+                scrubCleanupRef.current();
+            }
+            handleProgressSeek(clientX);
+            const onMove = (ev) => {
+                ev.preventDefault();
+                handleProgressSeek(ev.clientX);
+            };
+            const onUp = () => {
+                window.removeEventListener("mousemove", onMove);
+                window.removeEventListener("mouseup", onUp);
+                scrubCleanupRef.current = null;
+            };
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp);
+            scrubCleanupRef.current = () => {
+                window.removeEventListener("mousemove", onMove);
+                window.removeEventListener("mouseup", onUp);
+                scrubCleanupRef.current = null;
+            };
+        },
+        [handleProgressSeek]
+    );
+
+    const shouldSkipTrackEvent = (target) => {
+        if (!target || typeof target.closest !== "function") return false;
+        if (target.closest("button")) return true;
+        if (target.closest("input")) return true;
+        return false;
+    };
+
+    const onTrackMouseDown = React.useCallback(
+        (ev) => {
+            if (shouldSkipTrackEvent(ev.target)) return;
+            ev.preventDefault();
+            startProgressScrub(ev.clientX);
+        },
+        [startProgressScrub]
+    );
+
+    const onTrackTouch = React.useCallback(
+        (ev) => {
+            if (shouldSkipTrackEvent(ev.target)) return;
+            const touch = ev.touches[0];
+            if (!touch) return;
+            ev.preventDefault();
+            handleProgressSeek(touch.clientX);
+        },
+        [handleProgressSeek]
+    );
+
+    useEffect(() => () => {
+        if (scrubCleanupRef.current) {
+            scrubCleanupRef.current();
+        }
+    }, []);
 
     function getMarkerTitle(ev) {
         if (!ev) return "Event";
@@ -884,7 +985,7 @@ export default function SessionReplay({ sessionId }) {
                         {playerStatus}
                     </span>
                     <span className="font-medium text-slate-500">
-                        {formatTime(currentTime)} / {formatTime(playerMeta.totalTime)}
+                        {formatTime(currentTime)} / {formatTime(totalDuration)}
                     </span>
                 </div>
             </div>
@@ -967,11 +1068,17 @@ export default function SessionReplay({ sessionId }) {
                 </div>
 
                 <div className="relative h-20">
-                    <div className="absolute inset-x-0 top-1/2 -translate-y-1/2">
+                    <div
+                        ref={progressTrackRef}
+                        className="absolute inset-x-0 top-1/2 -translate-y-1/2"
+                        onMouseDown={onTrackMouseDown}
+                        onTouchStart={onTrackTouch}
+                        onTouchMove={onTrackTouch}
+                    >
                         <div className="relative h-2 w-full bg-slate-200">
                             <div
                                 className="absolute inset-y-0 left-0 bg-sky-500"
-                                style={{ width: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%` }}
+                                style={{ width: `${progressPercent}%` }}
                             />
                         </div>
 
@@ -1012,17 +1119,11 @@ export default function SessionReplay({ sessionId }) {
                     <input
                         type="range"
                         min={0}
-                        max={playerMeta.totalTime || replayerRef.current?.getMetaData?.().totalTime || 0}
-                        value={currentTime}
+                        max={totalDuration}
+                        value={Math.min(totalDuration, currentTime)}
                         onChange={(e) => {
-                            const rep = replayerRef.current;
                             const newTime = Number(e.target.value);
-                            if (!rep) return;
-                            rep.pause();
-                            lastPausedTimeRef.current = newTime;
-                            rep.play(newTime);
-                            setPlayerStatus("playing");
-                            setCurrentTime(newTime);
+                            seekToTime(newTime);
                         }}
                         className="timeline-slider absolute inset-0 z-30 appearance-none bg-transparent"
                     />
@@ -1248,7 +1349,7 @@ export default function SessionReplay({ sessionId }) {
                                         <button
                                             type="button"
                                             onClick={() => {
-                                                setSelectedTraceId(entry.id);
+                                                setSelectedTraceId((prev) => (prev === entry.id ? null : entry.id));
                                                 setViewMode("trace");
                                             }}
                                             className={`flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition ${
