@@ -159,6 +159,8 @@ export default function SessionReplay({ sessionId }) {
     const replayerRef = useRef(null);
     const progressTrackRef = useRef(null);
     const scrubCleanupRef = useRef(null);
+    const scrubWasPlayingRef = useRef(false);
+    const lastScrubMsRef = useRef(0);
     const rrwebZeroTsRef = useRef(null);
     const lastPausedTimeRef = useRef(0);
     const lastPlayerSizeRef = useRef({ width: 0, height: 0 });
@@ -593,7 +595,7 @@ export default function SessionReplay({ sessionId }) {
     }, [playerMeta.totalTime]);
 
     const seekToTime = React.useCallback(
-        (ms, { autoPlay = true } = {}) => {
+        (ms, { autoPlay = false } = {}) => {
             const rep = replayerRef.current;
             const total = getTotalDuration();
             const clamped = Math.max(0, Math.min(total || 0, Number.isFinite(ms) ? ms : 0));
@@ -667,98 +669,12 @@ export default function SessionReplay({ sessionId }) {
         return Math.max(0, Math.min(total || 0, rrMs));
     }
 
-    const findTraceForEvent = React.useCallback(
-        (ev) => {
-            if (!ev || !traceEntries.length) return null;
-            const meta = ev.meta || {};
-            const eventHints = [
-                ev.actionId,
-                ev.id,
-                ev.ui?.traceHint,
-                ev.ui?.traceId,
-                ev.ui?.trace_id,
-                ev.ui?.requestRid,
-                ev.ui?.rid,
-                ev.ui?.groupKey,
-                ev.ui?.key,
-                ev.label,
-            ].filter(Boolean);
-
-            const traceHints = [
-                meta.traceId,
-                meta.trace_id,
-                meta.requestTraceId,
-                meta.requestRid,
-                meta.rid,
-                meta.id,
-                meta.traceHint,
-            ].filter(Boolean);
-
-            const allHints = [...traceHints, ...eventHints];
-
-            const matchesHint = (entry, hint) => {
-                if (!hint) return false;
-                const req = entry.request || {};
-                return (
-                    entry.id === hint ||
-                    entry.groupKey === hint ||
-                    entry.requestRid === hint ||
-                    entry.label === hint ||
-                    req.traceId === hint ||
-                    req.requestRid === hint ||
-                    req.rid === hint ||
-                    req.key === hint ||
-                    req.actionId === hint
-                );
-            };
-
-            for (const hint of allHints) {
-                const direct = traceEntries.find(
-                    (entry) => matchesHint(entry, hint)
-                );
-                if (direct) return direct;
-            }
-
-            const keyMatches = [meta.key, meta.urlKey, meta.name].filter(Boolean);
-            for (const key of keyMatches) {
-                const match = traceEntries.find(
-                    (entry) => entry.label === key || entry.request?.key === key || entry.groupKey === key
-                );
-                if (match) return match;
-            }
-
-            if (meta.method && meta.url) {
-                const method = String(meta.method).toUpperCase();
-                const url = String(meta.url);
-                const match = traceEntries.find((entry) => {
-                    const req = entry.request || {};
-                    return (
-                        req.method && req.url &&
-                        String(req.method).toUpperCase() === method &&
-                        String(req.url) === url
-                    );
-                });
-                if (match) return match;
-            }
-
-            if (ev.actionId) {
-                const actionMatch = traceEntries.find((entry) => {
-                    const req = entry.request || {};
-                    return entry.groupKey === ev.actionId || req.actionId === ev.actionId;
-                });
-                if (actionMatch) return actionMatch;
-            }
-
-            return null;
-        },
-        [traceEntries]
-    );
-
     function jumpToEvent(ev) {
         const target = alignedSeekMsFor(ev);
         if (target == null) return;
 
-        seekToTime(target);
+        const shouldResume = playerStatus === "playing";
+        seekToTime(target, { autoPlay: shouldResume });
         const key = ev.__key;
         if (key) {
             setActiveEventId(key);
@@ -767,21 +683,10 @@ export default function SessionReplay({ sessionId }) {
                 if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
             });
         }
-
-        if (ev.kind === "request" || ev.kind === "action") {
-            const matchedTrace = findTraceForEvent(ev);
-            if (matchedTrace) {
-                setSelectedTraceId(matchedTrace.id);
-                setViewMode("trace");
-            } else if (traceEntries.length) {
-                setViewMode("trace");
-                setSelectedTraceId((prev) => prev ?? traceEntries[0].id);
-            }
-        }
     }
 
     const handleProgressSeek = React.useCallback(
-        (clientX) => {
+        (clientX, { autoPlay = false } = {}) => {
             const track = progressTrackRef.current;
             if (!track) return;
             const rect = track.getBoundingClientRect();
@@ -789,7 +694,8 @@ export default function SessionReplay({ sessionId }) {
             const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
             const total = getTotalDuration();
             const nextTime = ratio * (total || 0);
-            seekToTime(nextTime);
+            lastScrubMsRef.current = nextTime;
+            seekToTime(nextTime, { autoPlay });
         },
         [getTotalDuration, seekToTime]
     );
@@ -799,14 +705,29 @@ export default function SessionReplay({ sessionId }) {
             if (scrubCleanupRef.current) {
                 scrubCleanupRef.current();
             }
-            handleProgressSeek(clientX);
+            const rep = replayerRef.current;
+            const wasPlaying = playerStatus === "playing";
+            scrubWasPlayingRef.current = wasPlaying;
+            if (wasPlaying && rep) {
+                try {
+                    rep.pause();
+                } catch (err) {
+                    warn("pause before scrub failed", err);
+                }
+                setPlayerStatus("paused");
+            }
+            handleProgressSeek(clientX, { autoPlay: false });
             const onMove = (ev) => {
                 ev.preventDefault();
-                handleProgressSeek(ev.clientX);
+                handleProgressSeek(ev.clientX, { autoPlay: false });
             };
             const onUp = () => {
                 window.removeEventListener("mousemove", onMove);
                 window.removeEventListener("mouseup", onUp);
+                if (scrubWasPlayingRef.current) {
+                    seekToTime(lastScrubMsRef.current, { autoPlay: true });
+                }
+                scrubWasPlayingRef.current = false;
                 scrubCleanupRef.current = null;
             };
             window.addEventListener("mousemove", onMove);
@@ -814,10 +735,14 @@ export default function SessionReplay({ sessionId }) {
             scrubCleanupRef.current = () => {
                 window.removeEventListener("mousemove", onMove);
                 window.removeEventListener("mouseup", onUp);
+                if (scrubWasPlayingRef.current) {
+                    seekToTime(lastScrubMsRef.current, { autoPlay: true });
+                }
+                scrubWasPlayingRef.current = false;
                 scrubCleanupRef.current = null;
             };
         },
-        [handleProgressSeek]
+        [handleProgressSeek, playerStatus, seekToTime]
     );
 
     const shouldSkipTrackEvent = (target) => {
@@ -842,9 +767,10 @@ export default function SessionReplay({ sessionId }) {
             const touch = ev.touches[0];
             if (!touch) return;
             ev.preventDefault();
-            handleProgressSeek(touch.clientX);
+            const shouldResume = playerStatus === "playing";
+            handleProgressSeek(touch.clientX, { autoPlay: shouldResume });
         },
-        [handleProgressSeek]
+        [handleProgressSeek, playerStatus]
     );
 
     useEffect(() => () => {
@@ -1036,7 +962,7 @@ export default function SessionReplay({ sessionId }) {
                                 setPlayerStatus("playing");
                             }
                         }}
-                        className="inline-flex items-center border border-slate-900 bg-slate-900 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                        className="inline-flex items-center rounded-full border border-slate-900 bg-slate-900 px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
                     >
                         <span>{playerStatus === "playing" ? "Pause" : "Play"}</span>
                     </button>
@@ -1051,14 +977,14 @@ export default function SessionReplay({ sessionId }) {
                             setPlayerStatus("playing");
                             setCurrentTime(0);
                         }}
-                        className="inline-flex items-center border border-slate-300 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-600 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                        className="inline-flex items-center rounded-full border border-slate-300 bg-white px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-slate-600 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
                     >
                         Restart
                     </button>
                     <button
                         type="button"
                         onClick={() => applyFitContain("manual-fit")}
-                        className="ml-2 inline-flex items-center border border-slate-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 hover:bg-slate-100"
+                        className="ml-2 inline-flex items-center rounded-full border border-slate-300 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 transition hover:bg-slate-100"
                     >
                         Refit now
                     </button>
@@ -1070,14 +996,14 @@ export default function SessionReplay({ sessionId }) {
                 <div className="relative h-20">
                     <div
                         ref={progressTrackRef}
-                        className="absolute inset-x-0 top-1/2 -translate-y-1/2"
+                        className="absolute inset-x-0 top-1/2 -translate-y-1/2 px-2"
                         onMouseDown={onTrackMouseDown}
                         onTouchStart={onTrackTouch}
                         onTouchMove={onTrackTouch}
                     >
-                        <div className="relative h-2 w-full bg-slate-200">
+                        <div className="relative h-4 w-full overflow-hidden rounded-full bg-slate-200/80 shadow-inner">
                             <div
-                                className="absolute inset-y-0 left-0 bg-sky-500"
+                                className="absolute inset-y-0 left-0 rounded-full bg-sky-500 transition-all duration-150"
                                 style={{ width: `${progressPercent}%` }}
                             />
                         </div>
@@ -1092,7 +1018,7 @@ export default function SessionReplay({ sessionId }) {
                                     <button
                                         key={marker.key || marker.position}
                                         type="button"
-                                        className={`pointer-events-auto absolute top-1/2 flex h-8 w-8 -translate-y-1/2 -translate-x-1/2 items-center justify-center border border-white text-slate-900 transition focus:outline-none focus:ring-2 focus:ring-sky-400 ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "ring-2 ring-sky-300" : "hover:opacity-90"}`}
+                                        className={`pointer-events-auto absolute top-1/2 flex h-9 w-9 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border border-white text-slate-900 shadow-sm transition focus:outline-none focus:ring-2 focus:ring-sky-400 ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "ring-2 ring-sky-300" : "hover:scale-105"}`}
                                         style={{ left: `${marker.position * 100}%` }}
                                         onClick={() => jumpToEvent(event)}
                                         onMouseEnter={() => setHoveredMarker(marker)}
@@ -1108,7 +1034,7 @@ export default function SessionReplay({ sessionId }) {
                         </div>
 
                         <div
-                            className="absolute top-1/2 z-40 h-4 w-4 -translate-y-1/2 border-2 border-sky-400 bg-white"
+                            className="absolute top-1/2 z-40 h-5 w-5 -translate-y-1/2 rounded-full border-2 border-sky-400 bg-white shadow"
                             style={{
                                 left: `${playerMeta.totalTime ? Math.min(100, (currentTime / playerMeta.totalTime) * 100) : 0}%`,
                                 transform: "translate(-50%, -50%)",
@@ -1123,7 +1049,8 @@ export default function SessionReplay({ sessionId }) {
                         value={Math.min(totalDuration, currentTime)}
                         onChange={(e) => {
                             const newTime = Number(e.target.value);
-                            seekToTime(newTime);
+                            const shouldResume = playerStatus === "playing";
+                            seekToTime(newTime, { autoPlay: shouldResume });
                         }}
                         className="timeline-slider absolute inset-0 z-30 appearance-none bg-transparent"
                     />
