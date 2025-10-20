@@ -178,6 +178,7 @@ export default function SessionReplay({ sessionId }) {
     const [viewMode, setViewMode] = useState("replay");
     const [selectedTraceId, setSelectedTraceId] = useState(null);
     const [collapsedGroups, setCollapsedGroups] = useState({});
+    const [rrwebZeroTs, setRrwebZeroTs] = useState(null);
 
     const rrwebFirstTsRef = useRef(null);
     const clockOffsetRef = useRef(0);
@@ -187,6 +188,7 @@ export default function SessionReplay({ sessionId }) {
         setSelectedTraceId(null);
         setShowAll(false);
         setCollapsedGroups({});
+        setRrwebZeroTs(null);
     }, [sessionId]);
 
     useEffect(() => {
@@ -363,7 +365,7 @@ export default function SessionReplay({ sessionId }) {
 
     // ---- normalize ticks ----
     const ticks = useMemo(() => {
-        const zero = rrwebZeroTsRef.current;
+        const zero = rrwebZeroTs;
         const out = [];
         for (const [idx, ev] of (rawTicks || []).entries()) {
             const { start, end } = deriveServerWindow(ev);
@@ -390,12 +392,11 @@ export default function SessionReplay({ sessionId }) {
             return da - db;
         });
         return out;
-    }, [rawTicks]);
+    }, [rawTicks, rrwebZeroTs]);
 
     const absNow = useMemo(() => {
-        const zero = rrwebZeroTsRef.current;
-        return typeof zero === "number" ? zero + currentTime : null;
-    }, [currentTime]);
+        return typeof rrwebZeroTs === "number" ? rrwebZeroTs + currentTime : null;
+    }, [currentTime, rrwebZeroTs]);
 
     const baseItems = useMemo(() => {
         if (showAll) return ticks;
@@ -438,8 +439,10 @@ export default function SessionReplay({ sessionId }) {
                 const initial = queueRef.current.splice(0, queueRef.current.length);
                 if (!initial.length) { setPlayerStatus("no-rrweb"); return; }
 
-                rrwebZeroTsRef.current = initial[0]?.timestamp || null;
-                rrwebFirstTsRef.current = initial[0]?.timestamp || null;
+                const zeroTs = initial[0]?.timestamp || null;
+                rrwebZeroTsRef.current = zeroTs;
+                rrwebFirstTsRef.current = zeroTs;
+                setRrwebZeroTs(zeroTs);
 
                 if (rrwebFirstTsRef.current && ticks.length) {
                     clockOffsetRef.current = ticks[0]._t - rrwebFirstTsRef.current;
@@ -598,7 +601,11 @@ export default function SessionReplay({ sessionId }) {
         (ms, { autoPlay = false } = {}) => {
             const rep = replayerRef.current;
             const total = getTotalDuration();
-            const clamped = Math.max(0, Math.min(total || 0, Number.isFinite(ms) ? ms : 0));
+            const requested = Number.isFinite(ms) ? ms : 0;
+            const hasTotal = Number.isFinite(total) && total > 0;
+            const clamped = hasTotal
+                ? Math.max(0, Math.min(total, requested))
+                : Math.max(0, requested);
 
             lastPausedTimeRef.current = clamped;
             setCurrentTime(clamped);
@@ -661,30 +668,43 @@ export default function SessionReplay({ sessionId }) {
     }, [timelineMarkers]);
 
     function alignedSeekMsFor(ev) {
-        const aligned =
-            (typeof ev._alignedStart === "number" && ev._alignedStart) ??
-            (typeof ev._alignedEnd === "number" && ev._alignedEnd) ??
-            null;
+        if (!ev) return null;
 
-        const serverMs =
-            (typeof ev._startServer === "number" && ev._startServer) ??
-            (typeof ev._endServer === "number" && ev._endServer) ??
-            (typeof ev._t === "number" && ev._t) ??
-            null;
+        const candidates = [];
 
-        const rrMs =
-            aligned ??
-            serverToRrwebOffsetMs(serverMs);
+        if (typeof ev._alignedStart === "number") candidates.push(ev._alignedStart);
+        if (typeof ev._alignedEnd === "number") candidates.push(ev._alignedEnd);
+
+        if (typeof ev._startServer === "number") {
+            const mapped = serverToRrwebOffsetMs(ev._startServer);
+            if (mapped != null) candidates.push(mapped);
+        }
+
+        if (typeof ev._endServer === "number") {
+            const mapped = serverToRrwebOffsetMs(ev._endServer);
+            if (mapped != null) candidates.push(mapped);
+        }
+
+        if (typeof ev._t === "number") {
+            const mapped = serverToRrwebOffsetMs(ev._t);
+            if (mapped != null) candidates.push(mapped);
+        }
+
+        const rrMs = candidates.find((v) => Number.isFinite(v) && v >= 0) ?? candidates.find((v) => Number.isFinite(v)) ?? null;
         if (rrMs == null) return null;
+
         const total = getTotalDuration();
-        return Math.max(0, Math.min(total || 0, rrMs));
+        const hasTotal = Number.isFinite(total) && total > 0;
+        const normalized = rrMs >= 0 ? rrMs : 0;
+        return hasTotal ? Math.min(total, normalized) : normalized;
     }
 
     function jumpToEvent(ev) {
         const target = alignedSeekMsFor(ev);
         if (target == null) return;
 
-        seekToTime(target, { autoPlay: false });
+        const shouldResume = playerStatus === "playing";
+        seekToTime(target, { autoPlay: shouldResume });
         const key = ev.__key;
         if (key) {
             setActiveEventId(key);
@@ -1017,18 +1037,39 @@ export default function SessionReplay({ sessionId }) {
                                 const isActive = activeEventId && event.__key === activeEventId;
                                 const eventTime = alignedSeekMsFor(event);
                                 const markerTitle = getMarkerTitle(event);
+
+                                const activateMarker = (ev) => {
+                                    if (ev) {
+                                        if (typeof ev.button === "number" && ev.button !== 0) return;
+                                        ev.preventDefault?.();
+                                        ev.stopPropagation?.();
+                                    }
+                                    jumpToEvent(event);
+                                };
+
                                 return (
                                     <button
                                         key={marker.key || marker.position}
                                         type="button"
-                                        className={`pointer-events-auto absolute top-1/2 flex aspect-square h-10 w-10 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border-2 border-white/80 text-white shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white overflow-hidden ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "ring-4 ring-sky-300 ring-offset-2 ring-offset-white scale-105" : "hover:scale-105"}`}
-                                        style={{ left: `${marker.position * 100}%` }}
-                                        onClick={() => jumpToEvent(event)}
+                                        className={`pointer-events-auto absolute top-1/2 flex h-10 w-10 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border-2 border-white/80 text-white shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white overflow-hidden ${KIND_COLORS[event.kind] || "bg-slate-500"} ${isActive ? "ring-4 ring-sky-300 ring-offset-2 ring-offset-white scale-105" : "hover:scale-105"}`}
+                                        style={{
+                                            left: `${marker.position * 100}%`,
+                                            borderRadius: "9999px",
+                                            clipPath: "circle(50%)",
+                                        }}
+                                        onPointerDown={activateMarker}
+                                        onClick={activateMarker}
+                                        onKeyDown={(ev) => {
+                                            if (ev.key === "Enter" || ev.key === " ") {
+                                                activateMarker(ev);
+                                            }
+                                        }}
                                         onMouseEnter={() => setHoveredMarker(marker)}
                                         onMouseLeave={() => setHoveredMarker(null)}
                                         onFocus={() => setHoveredMarker(marker)}
                                         onBlur={() => setHoveredMarker(null)}
                                         title={`${event.kind || "event"} • ${markerTitle}${eventTime != null ? ` • ${formatMaybeTime(eventTime)}` : ""}`}
+                                        data-timeline-marker
                                     >
                                         <MarkerIcon kind={event.kind} className="text-white" />
                                     </button>
@@ -1124,7 +1165,7 @@ export default function SessionReplay({ sessionId }) {
                         return (
                             <div
                                 key={groupKey}
-                                className="w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-50/90 text-slate-900 shadow-sm"
+                                className="w-full overflow-hidden rounded-lg border border-slate-300 bg-slate-200/80 text-slate-900 shadow-md"
                             >
                                 <button
                                     type="button"
@@ -1136,7 +1177,7 @@ export default function SessionReplay({ sessionId }) {
                                         })
                                     }
                                     aria-expanded={!isCollapsed}
-                                    className="flex w-full items-start justify-between gap-3 border-b border-slate-200 bg-slate-100/80 px-4 py-3 text-left transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                                    className="flex w-full items-start justify-between gap-3 border-b border-slate-300 bg-slate-300/70 px-4 py-3 text-left transition hover:bg-slate-200/80 focus:outline-none focus:ring-2 focus:ring-sky-500"
                                 >
                                     <div className="space-y-1">
                                         <div className="text-sm font-semibold text-slate-900">{title}</div>
@@ -1164,12 +1205,12 @@ export default function SessionReplay({ sessionId }) {
                                                     key={eventKey}
                                                     type="button"
                                                     onClick={() => jumpToEvent(e)}
-                                                className={`group flex w-full flex-col gap-3 rounded-lg px-4 py-3 text-left transition text-slate-900 ${
-                                                    isEventActive
-                                                        ? "bg-white shadow-inner ring-2 ring-sky-400"
-                                                        : "bg-slate-50 hover:bg-white"
-                                                }`}
-                                            >
+                                                    className={`group flex w-full flex-col gap-3 rounded-lg px-4 py-3 text-left transition text-slate-900 ${
+                                                        isEventActive
+                                                            ? "bg-white ring-2 ring-sky-500 ring-offset-2 ring-offset-slate-200 shadow-md"
+                                                            : "bg-slate-200/70 hover:bg-slate-100"
+                                                    }`}
+                                                >
                                                 <div className="flex items-start justify-between gap-4">
                                                     <div className="flex min-w-0 items-start gap-3">
                                                         <span className={`h-2 w-2 rounded-full ${KIND_COLORS[e.kind] || "bg-slate-500"}`} />
