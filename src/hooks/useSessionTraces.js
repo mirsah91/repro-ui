@@ -7,8 +7,9 @@ function decodeBase64(text) {
     if (typeof atob === "function") {
         try { return atob(text); } catch { /* ignore */ }
     }
-    if (typeof Buffer !== "undefined") {
-        try { return Buffer.from(text, "base64").toString("utf-8"); } catch { /* ignore */ }
+    const BufferCtor = typeof globalThis !== "undefined" ? globalThis.Buffer : undefined;
+    if (BufferCtor) {
+        try { return BufferCtor.from(text, "base64").toString("utf-8"); } catch { /* ignore */ }
     }
     return null;
 }
