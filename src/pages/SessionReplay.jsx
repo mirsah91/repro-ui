@@ -178,6 +178,7 @@ export default function SessionReplay({ sessionId }) {
     const [viewMode, setViewMode] = useState("replay");
     const [selectedTraceId, setSelectedTraceId] = useState(null);
     const [collapsedGroups, setCollapsedGroups] = useState({});
+    const [rrwebZeroTs, setRrwebZeroTs] = useState(null);
 
     const rrwebFirstTsRef = useRef(null);
     const clockOffsetRef = useRef(0);
@@ -187,6 +188,7 @@ export default function SessionReplay({ sessionId }) {
         setSelectedTraceId(null);
         setShowAll(false);
         setCollapsedGroups({});
+        setRrwebZeroTs(null);
     }, [sessionId]);
 
     useEffect(() => {
@@ -363,7 +365,7 @@ export default function SessionReplay({ sessionId }) {
 
     // ---- normalize ticks ----
     const ticks = useMemo(() => {
-        const zero = rrwebZeroTsRef.current;
+        const zero = rrwebZeroTs;
         const out = [];
         for (const [idx, ev] of (rawTicks || []).entries()) {
             const { start, end } = deriveServerWindow(ev);
@@ -390,12 +392,11 @@ export default function SessionReplay({ sessionId }) {
             return da - db;
         });
         return out;
-    }, [rawTicks]);
+    }, [rawTicks, rrwebZeroTs]);
 
     const absNow = useMemo(() => {
-        const zero = rrwebZeroTsRef.current;
-        return typeof zero === "number" ? zero + currentTime : null;
-    }, [currentTime]);
+        return typeof rrwebZeroTs === "number" ? rrwebZeroTs + currentTime : null;
+    }, [currentTime, rrwebZeroTs]);
 
     const baseItems = useMemo(() => {
         if (showAll) return ticks;
@@ -438,8 +439,10 @@ export default function SessionReplay({ sessionId }) {
                 const initial = queueRef.current.splice(0, queueRef.current.length);
                 if (!initial.length) { setPlayerStatus("no-rrweb"); return; }
 
-                rrwebZeroTsRef.current = initial[0]?.timestamp || null;
-                rrwebFirstTsRef.current = initial[0]?.timestamp || null;
+                const zeroTs = initial[0]?.timestamp || null;
+                rrwebZeroTsRef.current = zeroTs;
+                rrwebFirstTsRef.current = zeroTs;
+                setRrwebZeroTs(zeroTs);
 
                 if (rrwebFirstTsRef.current && ticks.length) {
                     clockOffsetRef.current = ticks[0]._t - rrwebFirstTsRef.current;
@@ -665,24 +668,34 @@ export default function SessionReplay({ sessionId }) {
     }, [timelineMarkers]);
 
     function alignedSeekMsFor(ev) {
-        const aligned =
-            (typeof ev._alignedStart === "number" && ev._alignedStart) ??
-            (typeof ev._alignedEnd === "number" && ev._alignedEnd) ??
-            null;
+        if (!ev) return null;
 
-        const serverMs =
-            (typeof ev._startServer === "number" && ev._startServer) ??
-            (typeof ev._endServer === "number" && ev._endServer) ??
-            (typeof ev._t === "number" && ev._t) ??
-            null;
+        const candidates = [];
 
-        const rrMs =
-            aligned ??
-            serverToRrwebOffsetMs(serverMs);
+        if (typeof ev._alignedStart === "number") candidates.push(ev._alignedStart);
+        if (typeof ev._alignedEnd === "number") candidates.push(ev._alignedEnd);
+
+        if (typeof ev._startServer === "number") {
+            const mapped = serverToRrwebOffsetMs(ev._startServer);
+            if (mapped != null) candidates.push(mapped);
+        }
+
+        if (typeof ev._endServer === "number") {
+            const mapped = serverToRrwebOffsetMs(ev._endServer);
+            if (mapped != null) candidates.push(mapped);
+        }
+
+        if (typeof ev._t === "number") {
+            const mapped = serverToRrwebOffsetMs(ev._t);
+            if (mapped != null) candidates.push(mapped);
+        }
+
+        const rrMs = candidates.find((v) => Number.isFinite(v) && v >= 0) ?? candidates.find((v) => Number.isFinite(v)) ?? null;
         if (rrMs == null) return null;
+
         const total = getTotalDuration();
         const hasTotal = Number.isFinite(total) && total > 0;
-        const normalized = Math.max(0, rrMs);
+        const normalized = rrMs >= 0 ? rrMs : 0;
         return hasTotal ? Math.min(total, normalized) : normalized;
     }
 
@@ -690,7 +703,8 @@ export default function SessionReplay({ sessionId }) {
         const target = alignedSeekMsFor(ev);
         if (target == null) return;
 
-        seekToTime(target, { autoPlay: false });
+        const shouldResume = playerStatus === "playing";
+        seekToTime(target, { autoPlay: shouldResume });
         const key = ev.__key;
         if (key) {
             setActiveEventId(key);
